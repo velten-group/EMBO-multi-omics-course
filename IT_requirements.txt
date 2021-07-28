@@ -1,0 +1,27 @@
+IT setup
+
+* How many cores (CPU) would you need for each participant? 1
+
+* How many GB of RAM would you need for each participant? 8
+
+* Would you need 1 GPU per user ? No
+
+* Operating system (GNU/Linux, Windows 10, Guacamole) GNU/Linux
+
+* What software would you need to get installed ? 
+Rstudio
+Jupyter Notebook/Lab
+Python packges: muon, mofapy2 (and dependencies therein)
+R packages: ArchR, scran, scater, purrr, muon.r (https://github.com/PMBio/muon.r), MOFA2, knitr, testthat, Seurat, ggpubr, foreach, psych, MultiAssayExperiment, SummarizedExperiment, SingleCellExperiment, ggrastr, mvtnorm, GGally, rmarkdown, data.table, tidyverse, BiocStyle, Matrixrhdf5, dplyr, tidyr, reshape2, pheatmap, ggplot2, methods, RColorBrewer, cowplot, ggrepel, reticulate, HDF5Array, grDevices, stats, magrittr, forcats, utils, corrplot, DelayedArray, Rtsne, uwot, basilisk, stringi
+
+* Any public ssh keys, yaml files, configuration files....?
+will provide in early 2022
+
+* Do you need any data to be available from the machines?
+No
+
+* Do you need shared storage for the course ?
+Yes
+
+Requirements participants:
+experienced in either R or Python and comfortable to work with both, bash
