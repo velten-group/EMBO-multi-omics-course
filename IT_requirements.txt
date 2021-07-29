@@ -23,5 +23,5 @@ No
 * Do you need shared storage for the course ?
 Yes
 
-Requirements participants:
+Requirements participants (20 participants expected):
 experienced in either R or Python and comfortable to work with both, bash
