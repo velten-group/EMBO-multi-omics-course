@@ -12,7 +12,7 @@ Here you can find the course material for the practicals of the [EMBO Practical 
 
 ## Trainers/Tutors: 
 
- * Constantin Ahlman-Eltze
+ * Constantin Ahlmann-Eltze
  * Ricard Argelaguet
  * Danila Bredikhin
  * Max Frank
