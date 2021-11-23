@@ -1,13 +1,16 @@
-# EMBO Practical Course: Integrative analysis of multi-omics data
+# Practicals: Integrative analysis of multi-omics data
 
-Course material for the practicals of the [EMBO course Integrative analysis of multi-omics data](https://www.embl.org/about/info/course-and-conference-office/events/mmd22-01/). The full programme can be found [here](https://www.embl.org/about/info/course-and-conference-office/events/mmd22-01/)
+Here you can find the course material for the practicals of the [EMBO Practical course: Integrative analysis of multi-omics data](https://www.embl.org/about/info/course-and-conference-office/events/mmd22-01/). The full programme of the course can be found [here](https://www.embl.org/about/info/course-and-conference-office/events/mmd22-01/).
+
+
+## Agenda for practicals
 
  * [Practical Day 1: Data handling and integration for bulk-assay data](day1/README.md)
  * [Practical Day 2: Data handling and integration for single-cell data](day2/README.md)
  * [Practical Day 3: Applications](day3/README.md)
 
 
- Trainers/Tutors: 
+## Trainers/Tutors: 
 
  * Constantin Ahlman-Eltze
  * Ricard Argelaguet
