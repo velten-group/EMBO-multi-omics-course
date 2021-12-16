@@ -12,7 +12,7 @@ IT setup
 Rstudio
 Jupyter Notebook/Lab
 Python packges: muon, mofapy2 (and dependencies therein)
-R packages: ArchR, scran, scater, purrr, muon.r (https://github.com/PMBio/muon.r), MOFA2, knitr, testthat, Seurat, ggpubr, foreach, psych, MultiAssayExperiment, SummarizedExperiment, SingleCellExperiment, ggrastr, mvtnorm, GGally, rmarkdown, data.table, tidyverse, BiocStyle, Matrixrhdf5, dplyr, tidyr, reshape2, pheatmap, ggplot2, methods, RColorBrewer, cowplot, ggrepel, reticulate, HDF5Array, grDevices, stats, magrittr, forcats, utils, corrplot, DelayedArray, Rtsne, uwot, basilisk, stringi
+R packages: ArchR, scran, scater, purrr, muon.r (https://github.com/PMBio/muon.r), MOFA2, MOFAdata, knitr, testthat, Seurat, ggpubr, foreach, psych, MultiAssayExperiment, SummarizedExperiment, SingleCellExperiment, ggrastr, mvtnorm, GGally, rmarkdown, data.table, tidyverse, BiocStyle, Matrixrhdf5, dplyr, tidyr, reshape2, pheatmap, ggplot2, methods, RColorBrewer, cowplot, ggrepel, reticulate, HDF5Array, grDevices, stats, magrittr, forcats, utils, corrplot, DelayedArray, Rtsne, uwot, basilisk, stringi
 
 * Any public ssh keys, yaml files, configuration files....?
 will provide in early 2022
