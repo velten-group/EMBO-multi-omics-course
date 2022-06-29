@@ -8,6 +8,7 @@ Here you can find the course material for the practicals of the [EMBO Practical 
  * [Practical Day 1: Data handling and integration for bulk-assay data](day1/README.md)
  * [Practical Day 2: Data handling and integration for single-cell data](day2/README.md)
  * [Practical Day 3: Applications](day3/README.md)
+ * [Practical Day 4: Pathway informed factor models](day4/README.md)
 
 
 ## Trainers/Tutors: 
@@ -18,5 +19,6 @@ Here you can find the course material for the practicals of the [EMBO Practical 
  * Max Frank
  * Ilia Kats
  * Junyan Lu
+ * Arber Qoku
  * Britta Velten
  * Harald Vohringer
