@@ -7,7 +7,7 @@ output: html_document
 
 # Brief description
 
-This dataset is from the BeatAML study: https://www.cancer.gov/about-nci/organization/ccg/blog/2019/beataml, which is very similar to the study of our CLL cohort. Currently, I am using the drug screen, mRNA expression and mutation data from this study. I am also applying for the access to the proteomic data. If I am granted the access, I can perhaps also add the proteomic view here.   
+This dataset is from the BeatAML study: https://www.cancer.gov/about-nci/organization/ccg/blog/2019/beataml, which is very similar to the study of our CLL cohort. In this practical session, we will use the drug screen, mRNA expression and mutation data from this study. 
 
 
 # Load packages
@@ -63,7 +63,7 @@ Data structure
 ```{r}
 head(drugTab)
 ```
-Change to matrix 
+Reshape to a matrix 
 ```{r}
 drugMat <- drugTab %>%
   pivot_wider(names_from = "lab_id", values_from = "auc") %>%
@@ -77,7 +77,7 @@ dim(drugMat)
 ```
 
 Remove drugs that have too many NA values (optional).
-Removed drugs that have been tested in less than 50% of the samples
+Remove drugs that have been tested in less than 50% of the samples
 ```{r}
 keepDrug <- rowSums(is.na(drugMat))/ncol(drugMat) < 0.5
 drugMat.filt <- drugMat[keepDrug,]
@@ -96,7 +96,7 @@ geneTab <- read_tsv("processed/gene_mutation_table.tsv")
 geneTab 
 ```
 
-Change to matrix
+Reshape to a matrix
 ```{r}
 geneMat <- geneTab %>% 
   pivot_wider(names_from = "lab_id", values_from = "value") %>%
@@ -132,7 +132,7 @@ AML_df <- bind_rows(
 )
 ```
 
-We would like to keep the samples that have at least two view (optional)
+We would like to keep the samples that have at least two views (optional)
 ```{r}
 viewSum <- AML_df %>% 
   distinct(sample, view) %>%
@@ -170,7 +170,7 @@ model_opts$num_factors <- 20
 model_opts
 ```
 
-Change the likely hood of Mutations to "bernoulli
+Change the likelihood of Mutations to "bernoulli"
 ```{r}
 model_opts$likelihoods[["Mutations"]] <- "bernoulli"
 model_opts$likelihoods
@@ -235,6 +235,7 @@ plot_factor(MOFAobject,
   color_by = "Factor1"
 )
 ```
+
 Weight of genomic features on LF1
 ```{r, fig.height=5, fig.width=5}
 plot_weights(MOFAobject,
