@@ -11,7 +11,7 @@ IT setup
 * What software would you need to get installed ? 
 Rstudio
 Jupyter Notebook/Lab
-Python packges: muon, mudatasets, mofapy2 (and dependencies therein)
+Python packges: muon, mudatasets, mofapy2, mofax (and dependencies therein)
 R packages: ArchR, scran, scater, purrr, MuData (https://github.com/ilia-kats/MuData), MuDataSeurat (https://github.com/PMBio/MuDataSeurat), MOFA2, MOFAdata, knitr, testthat, Seurat, ggpubr, foreach, psych, MultiAssayExperiment, SummarizedExperiment, SingleCellExperiment, ggrastr, mvtnorm, GGally, rmarkdown, data.table, tidyverse, BiocStyle, Matrixrhdf5, dplyr, tidyr, reshape2, pheatmap, ggplot2, methods, RColorBrewer, cowplot, ggrepel, reticulate, HDF5Array, grDevices, stats, magrittr, forcats, utils, corrplot, DelayedArray, Rtsne, uwot, basilisk, stringi
 
 * Any public ssh keys, yaml files, configuration files....?
