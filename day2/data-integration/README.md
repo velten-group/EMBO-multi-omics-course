@@ -1,6 +1,6 @@
 # Intro
 
-We will see how methods like MOFA and WNN can be useful when analysing multimodal datasets. We will use [muon](https://github.com/PMBio/muon) as a convenient interface for multimodal integration.
+We will see how methods like MOFA and WNN can be useful when analysing multimodal datasets. We will use [muon](https://github.com/scverse/muon) as a convenient interface for multimodal integration.
 
 # Methods
 
@@ -16,19 +16,17 @@ We will see how a MOFA model can be trained on a single-cell multimodal dataset.
 
 For the downstream analysis, we will use a model pre-trained on the data discussed [in the previous practical](../data-handling).
 
-TODO:
 
-- demo notebook
-- pre-trained model for multiome and/or
-- pre-trained model for CITE-seq data
+# Notebooks
+
+For this part of the course, we prepared the following notebooks:
+
+- demo CITE-seq integration notebook.
 
 ## MOFA model interpretation
 
-We will see how variance explained, factor, loading and other plots can be useful to interpret the trained model.
+We can investigate how variance explained, factor, loading and other plots can be useful to interpret the trained model.
 
 We will mention how `MOFA2` (in R) or `mofax` (in Python) can be of help when interrogating the model.
 
-TODO:
-
-- demo notebook (same)
 
