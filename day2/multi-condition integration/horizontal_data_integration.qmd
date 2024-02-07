@@ -1,0 +1,324 @@
+---
+title: "Horizontal Data Integration"
+author: "Constantin Ahlmann-Eltze"
+date: today
+format: 
+  html:
+    code-fold: false
+    code-tools: true
+    embed-resources: true
+    highlight-style: github
+    toc: true 
+    code-line-numbers: false 
+bibliography: references.bib
+---
+
+![Figure 1 from *Computational principles and challenges in single-cell data integration* by @argelaguet2021. Horizontal data integration is concerned with relating cells measured in different conditions or batches where we have the same features (i.e., genes) for the cells.](images/horizontal_integration_screenshot.png)
+
+To start we will load the `tidyverse` packages and `SingleCellExperiment`:
+
+```{r}
+#| label: load_packages
+#| output: false
+library(tidyverse)
+library(SingleCellExperiment)
+```
+
+# Example data
+
+For this tutorial, we will use a popular dataset by @kang2018. The dataset measured the effect of interferon-$\beta$ stimulation on blood cells from eight patients. The [`muscData`](https://bioconductor.org/packages/muscData/) package provides an easy way to access the data as a [`SingleCellExperiment`](https://bioconductor.org/books/release/OSCA.intro/the-singlecellexperiment-class.html).
+
+```{r}
+#| label: load_kang_data
+sce <- muscData::Kang18_8vs8()
+sce
+```
+
+We log-transform the data to account for the heteroskedasticity, perform PCA to reduce the dimensions, and run UMAP for visualization. For the preprocessing, we will use [`scater`](https://bioconductor.org/packages/scater/) package which adds a new assay called `"logcounts"` and two `reducedDims(sce)` called `"PCA"` and `"UMAP"` . Equivalent steps exist in Seurat or scanpy.
+
+```{r}
+#| label: kang_preprocess
+sce <- scater::logNormCounts(sce)
+hvg <- order(MatrixGenerics::rowVars(logcounts(sce)), decreasing = TRUE)
+sce <- sce[hvg[1:500], ]
+sce <- scater::runPCA(sce, ncomponents = 50)
+sce <- scater::runUMAP(sce, dimred = "PCA")
+```
+
+To visualize the data, we use `ggplot2`
+
+```{r}
+#| label: fig-kang-umap
+#| fig-cap: UMAP of log transformed counts
+as_tibble(colData(sce)) |>
+  mutate(umap = reducedDim(sce, "UMAP")) |>
+  ggplot(aes(x = umap[,1], y = umap[,2])) +
+    geom_point(aes(color = stim), size = 0.3) +
+    coord_fixed()
+```
+
+::: {.callout-note collapse="true"}
+## Challenge: Do the preprocessing with Seurat (click to see result)
+
+The following code is based on Seurat's [*Guided Clustering Tutorial*](https://satijalab.org/seurat/archive/v3.0/pbmc3k_tutorial.html).
+
+```{r}
+#| label: seurat-preprocessing
+#| eval: false
+# For more information about the conversion see `?as.Seurat.CellDataSet`
+seur_obj <- Seurat::as.Seurat(muscData::Kang18_8vs8(), data = NULL)
+seur_obj <- Seurat::NormalizeData(seur_obj, normalization.method = "LogNormalize", scale.factor = 10000)
+seur_obj <- Seurat::FindVariableFeatures(seur_obj, selection.method = "vst", nfeatures = 500)
+# Subset to highly variable genes for memory efficiency
+seur_obj <- seur_obj[Seurat::VariableFeatures(object = seur_obj),]
+seur_obj <- Seurat::ScaleData(seur_obj)
+seur_obj <- Seurat::RunPCA(seur_obj, verbose = FALSE)
+seur_obj <-Seurat::RunUMAP(seur_obj, dims = 1:10)
+```
+
+```{r}
+#| label: seurat-plot
+#| caption: "UMAP plot after preprocessing with Seurat"
+#| eval: false
+Seurat::DimPlot(seur_obj, reduction = "umap", group.by = "stim")
+```
+:::
+
+@fig-kang-umap shows that the data separates by the treatment status. For many downstream analyses, it would be good to know how the cells from the stimulated condition are related to the cells from the control condition. For example for cell type assignment, we might want to annotate both conditions together and want to discount the effect of the treatment. This process is called **integration**.
+
+The goal is get a low-dimensional embedding of the cells where the stimulation does not affect the embedding and all residual variance comes from different cell states. @fig-integrated_picture shows a sucessfully integrated example.
+
+![UMAP of a succesfully integrated dataset.](images/integrated_data_picture.png){#fig-integrated_picture}
+
+# Integration approaches
+
+There are many methods for single-cell data integration and @luecken2022 benchmarked several approaches. Here, I will present four integration methods which are easy to use from R and cover a useful set of features:
+
+-   Manual projection
+-   Automated integration
+    -   Harmony
+    -   MNN
+-   Invertible integration
+    -   LEMUR
+
+## Manual Projection
+
+![Schematic picture of data from two conditions with the linear subspace that approximates the control condition](images/Subspace_illustration_both_condition_projection.png)
+
+```{r}
+ctrl_mat <- logcounts(sce)[,sce$stim == "ctrl"]
+stim_mat <- logcounts(sce)[,sce$stim == "stim"]
+
+ctrl_centers <- rowMeans(ctrl_mat)
+stim_centers <- rowMeans(stim_mat)
+
+ctrl_pca <- irlba::prcomp_irlba(t(ctrl_mat - ctrl_centers), n = 20, center = FALSE)
+ctrl_proj <- t(ctrl_pca$rotation) %*% (ctrl_mat - ctrl_centers)
+stim_proj <- t(ctrl_pca$rotation) %*% (stim_mat - stim_centers)
+
+manual_proj <- matrix(NA, nrow = 20, ncol = ncol(sce))
+manual_proj[,sce$stim == "ctrl"] <- as.matrix(ctrl_proj)
+manual_proj[,sce$stim == "stim"] <- as.matrix(stim_proj)
+```
+
+```{r}
+#| label: manual-umap
+#| caption: UMAP of log transformed counts
+#| collapse: true
+
+manual_proj_umap <- uwot::umap(t(manual_proj))
+
+as_tibble(colData(sce)) |>
+  mutate(umap = manual_proj_umap) |>
+  sample_frac() |>
+  ggplot(aes(x = umap[,1], y = umap[,2])) +
+    geom_point(aes(color = stim), size = 0.3) +
+    coord_fixed()
+```
+
+::: {.callout-note collapse="true"}
+## Challenge: What happens if you project on the `"stim"` condition?
+
+![Schematic picture of data from two conditions using the stimulated condition as reference.](images/Subspace_illustration_both_condition_projection2.png)
+
+The projection is orthogonal onto the subspace, which means it matters which condition is chosen as reference.
+
+```{r}
+stim_pca <- irlba::prcomp_irlba(t(stim_mat - stim_centers), n = 20, center = FALSE)
+ctrl_proj2 <- t(stim_pca$rotation) %*% (ctrl_mat - ctrl_centers)
+stim_proj2 <- t(stim_pca$rotation) %*% (stim_mat - stim_centers)
+
+manual_proj2 <- matrix(NA, nrow = 20, ncol = ncol(sce))
+manual_proj2[,sce$stim == "ctrl"] <- as.matrix(ctrl_proj2)
+manual_proj2[,sce$stim == "stim"] <- as.matrix(stim_proj2)
+
+manual_proj_umap2 <- uwot::umap(t(manual_proj2))
+
+as_tibble(colData(sce)) |>
+  mutate(umap = manual_proj_umap2) |>
+  sample_frac() |>
+  ggplot(aes(x = umap[,1], y = umap[,2])) +
+    geom_point(aes(color = stim), size = 0.3) +
+    coord_fixed()
+```
+
+For this example, using the `"stim"` condition as the reference leads to a worse integration.
+:::
+
+::: {.callout-warning collapse="true"}
+## Brain teaser: How can you make the manual projection approach work for more complex experimental designs?
+
+The projection approach consists of three steps:
+
+1.  Centering the data (e.g., `ctrl_mat - ctrl_centers`).
+2.  Choosing a reference condition and calculating the subspace that approximates the data from the reference condition (`irlba::prcomp_irlba(t(stim_mat - stim_centers))$rotation`).
+3.  Projecting the data from the other conditions onto that subspace (`t(ctrl_pca$rotation) %*% (stim_mat - stim_centers)`).
+
+For arbitrary experimental designs, we can perform the centering with a linear model fit:
+
+```{r}
+#| eval: false
+# A complex experimental design
+lm_fit <- lm(t(logcounts(sce)) ~ condition + batch, data = colData(sce))
+centered_mat <- t(residuals(lm_fit))
+# Assuming that `is_reference_condition` contains a selection of the cells
+ref_pca <- irlba::prcomp_irlba(centered_mat[,is_reference_condition], ...)
+proj_mat <- t(ref_pca$rotation) %*% centered_mat
+```
+:::
+
+## Automatic integration
+
+### Harmony
+
+One popular tool for data integration is Harmony [@korsunsky2019]. Harmony is build around _maximum diversity clustering_ [@fig-harmony_schematic], which in addition to minimizing the distance of each data point to a cluster center also maximizes the mixing of conditions assigned to each cluster.
+
+![Schematic of Harmony. Screenshot from Fig. 1 of @korsunsky2019](images/harmony_schematic.png){#fig-harmony_schematic}
+
+```{r}
+#| label: harmony_integration
+harm_mat <- harmony:::RunHarmony(reducedDim(sce, "PCA"), colData(sce), 
+                                 vars_use = c("stim"))
+harm_umap <- uwot::umap(harm_mat)
+
+as_tibble(colData(sce)) |>
+  mutate(umap = harm_umap) |>
+  sample_frac() |>
+  ggplot(aes(x = umap[,1], y = umap[,2])) +
+    geom_point(aes(color = stim), size = 0.3) +
+    coord_fixed()
+```
+
+### MNN
+
+MNN is short for mutual nearest neighbors and was invented for integrating two conditions by identifying the cells which are mutually nearest neighbors [@fig-mnn_schematic]. The [`batchelor`](https://bioconductor.org/packages/batchelor/) provides an efficient implementation which can also handle experimental designs with more than two conditions.
+
+![Schematic of MNN Screenshot from Fig. 1 of @haghverdi2018](images/mnn_schematic.png){#fig-mnn_schematic}
+
+```{r}
+#| label: mnn_integration
+mnn_sce <- batchelor::fastMNN(sce, batch = sce$stim, BSPARAM=BiocSingular::IrlbaParam())
+mnn_umap <- uwot::umap(reducedDim(mnn_sce, "corrected"))
+
+as_tibble(colData(sce)) |>
+  mutate(umap = mnn_umap) |>
+  sample_frac() |>
+  ggplot(aes(x = umap[,1], y = umap[,2])) +
+    geom_point(aes(color = stim), size = 0.3) +
+    coord_fixed()
+```
+
+# Invertible Integration
+
+Tools like MNN and Harmony take a PCA embedding and remove the effects of the specified covariates. But there is no way to go back from the integrated embedding to the original gene space. This means that we cannot ask the counter factual what the expression of a cell from the control condition would have been, had it been treated.
+
+A new tool called [LEMUR](https://bioconductor.org/packages/lemur/) provides this functionality by matching the subspace of each condition [@ahlmann-eltze2023]. @fig-subspace_matching illustrates the principle.
+
+![Schematic picture of data from two conditions with the respective linear subspace.](images/Subspace_illustration_both_condition_with_arrow.png){#fig-subspace_matching}
+
+LEMUR takes as input a `SingleCellExperiment` object, the specification of the experimental design, and the number of latent dimensions. To refine the embedding, we will use the provided cell type annotations.
+```{r}
+fit <- lemur::lemur(sce, design = ~ stim, n_embedding = 30, verbose = FALSE)
+fit <- lemur::align_by_grouping(fit, fit$colData$cell, verbose = FALSE)
+```
+
+::: {.callout-note collapse="true"}
+## Challenge: How refine the embedding of LEMUR with an automated tool?
+
+```{r}
+fit <- lemur::lemur(sce, design = ~ stim, n_embedding = 30, verbose = FALSE)
+fit <- lemur::align_harmony(fit, verbose = FALSE)
+```
+:::
+
+Making a UMAP plot of LEMUR's embedding shows that it sucessfully integrated the conditions (@fig-lemur_umap).
+
+```{r}
+#| label: fig-lemur_umap
+#| fig-cap: "UMAP plot of LEMUR's invertible embedding."
+lemur_umap <- uwot::umap(t(fit$embedding))
+
+as_tibble(colData(sce)) |>
+  mutate(umap = lemur_umap) |>
+  sample_frac() |>
+  ggplot(aes(x = umap[,1], y = umap[,2])) +
+    geom_point(aes(color = stim), size = 0.3) +
+    coord_fixed()
+```
+
+The advantage of the invertible integration is that we can make predictions what the expression of a cell from the control condition would have been, had it been stimulated and vice versa. Contrasting those predictions tells us how much the gene expression changes for that cell in any gene.
+
+![Differential expression with an invertible integration](images/differential_expression.png){width="80%"}
+
+We call LEMUR's `test_de` function to compare the expression values in the `"stim"` and `"ctrl"` conditions.
+```{r}
+#| label: lemur-calc-de
+fit <- lemur::test_de(fit, contrast = cond(stim = "stim") - cond(stim = "ctrl"))
+```
+
+We can now pick individual genes and plot the predicted log fold change for each cell to show how it varies as a function of the underlying gene expression values (@fig-lemur_plot_de).
+
+```{r}
+#| label: fig-lemur_plot_de
+#| layout-ncol: 2
+#| fig-cap: 
+#|   - "Expression of _PLSCR1_ in control and stim condition"
+#|   - "LEMUR's prediction of differential expression"
+as_tibble(colData(sce)) |>
+  mutate(umap = lemur_umap) |>
+  mutate(expr = logcounts(fit)["PLSCR1",]) |>
+  sample_frac() |>
+  ggplot(aes(x = umap[,1], y = umap[,2])) +
+    geom_point(aes(color = expr), size = 0.3) +
+    scale_color_viridis_c() +
+    facet_wrap(vars(stim)) +
+    coord_fixed()
+
+as_tibble(colData(sce)) |>
+  mutate(umap = lemur_umap) |>
+  mutate(de = assay(fit, "DE")["PLSCR1",]) |>
+  sample_frac() |>
+  ggplot(aes(x = umap[,1], y = umap[,2])) +
+    geom_point(aes(color = de), size = 0.3) +
+    scale_color_gradient2() +
+    coord_fixed()
+```
+
+::: {.callout-note collapse="true"}
+## Challenge: How to LEMUR to find groups of cells with consistent differential expression?
+
+```{r, paged.print=FALSE}
+nei <- lemur::find_de_neighborhoods(fit, group_by = vars(stim, ind), verbose = FALSE)
+as_tibble(nei) %>%
+  arrange(pval)
+```
+:::
+
+
+# Session Info
+
+```{r}
+sessionInfo()
+```
+
+
