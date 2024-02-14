@@ -4,7 +4,7 @@ author:
   name: "Ricard Argelaguet and Britta Velten"
   affiliation: "European Bioinformatics Institute, Cambridge, UK"
   email: "ricard@ebi.ac.uk"
-date: "`r Sys.Date()`"
+date: February 2023
 output:
   BiocStyle::html_document:
     toc: true
@@ -15,30 +15,29 @@ output:
 
 The data set consists of N=200 samples from a cohort of Chronic Lymphocytic Leukemia (CLL) patients where four omics were profiled from blood samples: DNA methylation (450K Illumina microarray), bulk RNA-seq, somatic mutations and drug response data from blood for N=200 patients with. The data set was introduced in detail [in this article](https://www.jci.org/articles/view/93801) and can be downloaded [here](http://bioconductor.org/packages/release/data/experiment/html/BloodCancerMultiOmics2017.html). The MOFA analysis was originally published [here](https://msb.embopress.org/cgi/doi/10.15252/msb.20178124)
 
-# Load libraries
+# Load packages
 
 Make sure that you have installed the [MOFA2](https://github.com/bioFAM/MOFA2#installation) and the [MOFAdata](https://www.bioconductor.org/packages/release/data/experiment/html/MOFAdata.html) package.
 ```{r, message=FALSE}
-library(data.table)
-library(ggplot2)
-library(tidyverse)
-library(MOFA2)
-library(MOFAdata)
+library("data.table")
+library("ggplot2")
+library("tidyverse")
+library("MOFA2")
 ```
 
 # Load data 
 
 Data is stored as a list of matrices. Features are stored in the rows and samples in the columns
 ```{r}
-utils::data("CLL_data")       
-lapply(CLL_data,dim)
+data("CLL_data", package = "MOFAdata")       
+sapply(CLL_data, dim)
 ```
 
 ## mRNA expression
 
 The mRNA expression has been normalised by library size, followed by a variance stabilizing transformation using [DESeq2](https://bioconductor.org/packages/release/bioc/html/DESeq2.html):
 ```{r}
-hist(CLL_data$mRNA)
+hist(CLL_data$mRNA, breaks = 100)
 ```
 
 ## DNA methylation
