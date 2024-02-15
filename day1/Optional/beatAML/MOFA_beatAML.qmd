@@ -1,0 +1,308 @@
+---
+title: "Optional tutorial: applying MOFA to integrate multi-omics data from the BeatAML study "
+author: 
+  name: "Junyan Lu"
+  affiliation: "University Hospital Heidelberg, Germany"
+  email: "junyan.lu@uni-heidelberg.de"
+date: "February 2024"
+format: 
+  html:
+    toc: true
+    toc-depth: 2
+    embed-resources: true
+---
+
+
+# Introduction
+
+In this optional tutorial, you are encouraged to apply MOFA, based on what you've learned in the main tutorial, to integrate and interpret a multi-omic dataset from the BeatAML study: https://www.cancer.gov/about-nci/organization/ccg/blog/2019/beataml. The datasets from BeatAML cohort are very similar to those from the CLL cohort. In this practical session, we will use the drug screen, mRNA expression and mutation data from this study. The pre-processed data can be found in the "processed" folder.   
+
+# Specific tasks
+
+**Task 1: Format the pre-processed omics data and prepare input for MOFA.**. You have the freedom to choose your own ways of formatting the omics data, as long as they make statistical sense and follow the requirements of MOFA model. If you are not sure, please consult the trainers.  
+
+**Task 2: Setup and train MOFA model.** Don't forget to choose an appropriate likelihood for each of the data modalities! 
+
+**Task 3: Visualise the MOFA training results.** You can use the pre-built functions within MOFA2 package or your own codes to explore the results of MOFA training. You are encouraged to answers questions like: How to get the factor scores for each sample? Are those factor scores correlate with each other? How much variance can each factor explain for each view?  
+
+**Task 4: Interpreting the MOFA training results.** Please use the pre-built functions within MOFA2 package or your own codes to answer the below questions:  
+- How to identify interesting factors from MOFA results?   
+- How to understanding the biology behind the MOFA factors?  
+- How those results can be used for clinical or biological applications?  
+
+
+# Solutions
+
+**We encourage you to attempt the tasks yourself before "peeking" at the solutions.**  
+
+## Load packages
+```{r, warning=FALSE, message=FALSE}
+library(MOFA2)
+library(DESeq2)
+library(tidyverse)
+```
+
+```{r}
+#| label: global_options
+#| echo: false
+knitr::opts_chunk$set(cache = TRUE, autodep = TRUE)
+```
+
+
+## Load and preprocess data
+
+### Gene expression matrix
+
+Load expression matrix
+```{r}
+exprMat <- read_tsv("processed/rna_count_matrix.tsv.gz") %>%
+  data.frame() %>% column_to_rownames("Gene_symbol") %>%
+  as.matrix()
+```
+
+Remove genes that have very low expression (optional).
+Only keep genes with median counts > 10
+```{r}
+keepGene <- rowMeans(exprMat) > 10
+exprMat <- exprMat[keepGene,]
+```
+
+Variance stabilizing transformation
+```{r}
+exprMat.vst <- varianceStabilizingTransformation(exprMat, blind=TRUE)
+```
+
+Current dimensions
+```{r}
+dim(exprMat.vst)
+```
+
+Only keep top 5000 most variable genes (optional)
+```{r}
+sds <- apply(exprMat.vst, 1, sd)
+exprMat.filt <- exprMat.vst[order(sds, decreasing = TRUE)[1:5000],]
+```
+
+
+### Drug response
+
+Load drug response as a table
+```{r}
+drugTab <- read_tsv("processed/drug_response_table.tsv")
+```
+
+Data structure
+```{r}
+head(drugTab)
+```
+
+Reshape to a matrix 
+```{r}
+drugMat <- drugTab %>%
+  pivot_wider(names_from = "lab_id", values_from = "auc") %>%
+  data.frame() %>% column_to_rownames("inhibitor") %>%
+  as.matrix()
+```
+
+Current dimension of the matrix
+```{r}
+dim(drugMat)
+```
+
+Remove drugs that have too many NA values (optional).
+Remove drugs that have been tested in less than 50% of the samples
+```{r}
+keepDrug <- rowSums(is.na(drugMat))/ncol(drugMat) < 0.5
+drugMat.filt <- drugMat[keepDrug,]
+```
+
+Current dimension
+```{r}
+dim(drugMat.filt)
+```
+
+### Genetic variations
+
+#### Load gene mutation table
+```{r}
+geneTab <- read_tsv("processed/gene_mutation_table.tsv")
+geneTab 
+```
+
+Reshape to a matrix
+```{r}
+geneMat <- geneTab %>% 
+  pivot_wider(names_from = "lab_id", values_from = "value") %>%
+  data.frame() %>% column_to_rownames("gene") %>%
+  as.matrix()
+```
+
+Current dimensions
+```{r}
+dim(geneMat)
+```
+
+There are quite some missing values (NA) in the data matrix. We will keep them, as MOFA should be able to deal with them. 
+```{r}
+str(geneMat)
+```
+
+## Prepare MOFA model
+
+### Create MOFA object
+Generate a long data frame
+```{r}
+AML_df <- bind_rows(
+  drugMat.filt %>% as_tibble(rownames = "feature") %>% 
+    pivot_longer(-feature, names_to = "sample", values_to = "value") %>% 
+    mutate(view = "Drugs"),
+  exprMat.filt %>% as_tibble(rownames = "feature") %>% 
+    pivot_longer(-feature, names_to = "sample", values_to = "value") %>% 
+    mutate(view = "mRNA"),
+  geneMat %>% as_tibble(rownames = "feature") %>% 
+    pivot_longer(-feature, names_to = "sample", values_to = "value") %>% 
+    mutate(view = "Mutations"),
+)
+```
+
+We would like to keep the samples that have at least two views (optional)
+```{r}
+viewSum <- AML_df %>% 
+  distinct(sample, view) %>%
+  group_by(sample) %>%
+  summarise(nView = length(view)) %>%
+  filter(nView >=2)
+
+AML_df.filt <- AML_df %>% filter(sample %in% viewSum$sample)
+```
+
+
+Create MOFA object
+```{r}
+MOFAobject <- create_mofa(AML_df.filt)
+```
+
+Plot data overview
+```{r}
+plot_data_overview(MOFAobject)
+```
+
+## Define MOFA options
+
+### Data options
+```{r}
+data_opts <- get_default_data_options(MOFAobject)
+data_opts
+```
+
+### Model options
+```{r}
+model_opts <- get_default_model_options(MOFAobject)
+model_opts$num_factors <- 20
+
+model_opts
+```
+
+Change the likelihood of Mutations to "bernoulli"
+```{r}
+model_opts$likelihoods[["Mutations"]] <- "bernoulli"
+model_opts$likelihoods
+```
+
+### Training options
+```{r}
+train_opts <- get_default_training_options(MOFAobject)
+train_opts$convergence_mode <- "fast"
+train_opts$seed <- 2024
+
+train_opts
+```
+
+## Train the MOFA model
+
+Prepare MOFA object
+```{r}
+MOFAobject <- prepare_mofa(MOFAobject,
+  data_options = data_opts,
+  model_options = model_opts,
+  training_options = train_opts
+)
+```
+
+Training
+```{r}
+MOFAobject <- run_mofa(MOFAobject)
+```
+
+
+## Visualising MOFA training results
+
+
+### Factor correlation matrix
+```{r, fig.width=5, fig.height=5}
+plot_factor_cor(MOFAobject)
+```
+**MOFA factors are largely orthogonal to each other**
+
+### Variance explained for each view by each factor
+```{r, fig.width=5, fig.height=8}
+plot_variance_explained(MOFAobject, max_r2=15)
+```
+**Factor 1 and Factor 3 explains the variance among all four views and therefore may be interesting** 
+
+### Total variance explained for each view by all factors
+```{r, fig.width=5, fig.height=4}
+plot_variance_explained(MOFAobject, plot_total = T)[[2]]
+```
+### Explore the biological meaning behind factor 1
+
+#### Factor 1 values
+```{r, fig.height=5, fig.width=5}
+plot_factor(MOFAobject, 
+  factors = 1, 
+  color_by = "Factor1"
+)
+```
+
+#### Weight of genomic features on LF1
+```{r, fig.height=5, fig.width=5}
+plot_weights(MOFAobject,
+ view = "Mutations",
+ factor = 1,
+ nfeatures = 10,     # Top number of features to highlight
+ scale = T           # Scale weights from -1 to 1
+)
+```
+LF1 is associated with some driver mutations in AML, including NPM1 and FLT3.ITD
+
+
+#### Weight of genomic features on LF1 (just another way of visualisation)
+```{r}
+plot_top_weights(MOFAobject,
+ view = "Mutations",
+ factor = 1,
+ nfeatures = 10,     # Top number of features to highlight
+ scale = T           # Scale weights from -1 to 1
+)
+```
+
+### LF1 values versus NPM1 mutation
+```{r}
+plot_factor(MOFAobject, 
+  factors = 1, 
+  color_by = "NPM1",
+  add_violin = TRUE,
+  dodge = TRUE
+)
+```
+
+### LF1 values versus NPM1 mutation
+```{r}
+plot_factor(MOFAobject, 
+  factors = 1, 
+  color_by = "FLT3.ITD",
+  add_violin = TRUE,
+  dodge = TRUE
+)
+```
+**Can you use the similar procedure to explore other factors you find interesting? What do you find? Feel free to communicate your findings with the trainers**
