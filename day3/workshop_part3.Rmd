@@ -1,0 +1,575 @@
+---
+title: "Workshop Part III - Mosaic single cell data integration"
+author: "Shila Ghazanfar"
+date: "`r format(Sys.time(), '%d %B, %Y')`"
+output:
+       html_document:
+                     toc: true
+                     toc_float:
+                           collapsed: false
+                           smooth_scroll: false
+                     code_folding: hide
+                     fig_width: 10 
+                     fig_height: 8
+---
+
+# Setup Configuration
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE,
+                      cache = FALSE, cache.lazy = FALSE)
+```
+
+# Load required packages
+
+While it is possible to fully compile this RMarkdown document, during the 
+workshop it is advisable to run the lines of code individually and make changes
+to the analysis parameters to help in learning and exploring.
+
+You will need to install:
+
+- Latest development version of StabMap package from Github.
+
+- If using anndata object from Parts I-II, zellkonverter package from Bioconductor.
+
+- If using reducedDimGirafe function, then the ggiraph package from CRAN.
+
+```{r}
+library(StabMap)
+
+library(SingleCellExperiment)
+library(BiocNeighbors)
+library(scran)
+library(scuttle)
+library(batchelor)
+library(bluster)
+library(scater)
+
+library(zellkonverter)
+library(S4Vectors)
+
+library(plotly)
+library(ggplot2)
+library(patchwork)
+library(ggiraph)
+library(RColorBrewer)
+library(grDevices)
+```
+
+In addition, we read in the helpful functions for this workshop.
+Note the function `plotReducedDimGirafe` requires the package `ggiraph`.
+
+```{r}
+source("workshop_functions.R")
+```
+
+# Reading data
+
+We are using the data from 10x Genomics' Breast Cancer Xenium platform and
+scFFPE dissociated single cell profile from the matching sample. These
+data objects have been prepared from Part I of the workshop and can be read in 
+as `SingleCellExperiment` objects using the `readH5AD()` function in the 
+`zellkonverter` package.
+
+We assume the data files are in the `data` folder above this repository folder. 
+You may need to edit the lines below to access the correct files.
+
+The `sce` object corresponds to the single-cell (dissociated) data, while `spe`
+object corresponds to the spatial omics data. We remove the cells in the `spe` 
+object that are Unlabeled.
+
+```{r}
+sce = readH5AD("../data/scFFPE_raw.h5ad", X_name = "counts")
+spe = readH5AD("../data/xenium_rep1.h5ad", X_name = "counts")
+spe <- spe[,!spe$Cluster %in% c("Unlabeled")]
+```
+
+To enable faster processing during this workshop, cells are selected randomly 
+from the `sce` and spatialexpression `spe` data objects.
+
+```{r}
+set.seed(2024)
+spe <- spe[,sample(colnames(spe), 10000)]
+sce <- sce[,sample(colnames(sce), 5000)]
+```
+
+# Data Pre-processing
+
+This segment normalizes and transforms the gene expression data, preparing it 
+for downstream analysis. It includes steps like logarithmic normalization and 
+highly variable gene selection. We select the 1,000 most highly variable genes.
+
+```{r}
+spe <- logNormCounts(spe)
+sce <- logNormCounts(sce)
+
+stats <- modelGeneVar(sce, assay.type = "logcounts")
+hvgs = getTopHVGs(stats, n = 1000)
+sce <- sce[hvgs,]
+```
+
+## Calculation of Mean Expression of Spatial Neighbors:
+
+The below code computes the mean expression of spatially neighboring cells in 
+the `spe` data. It enriches the dataset with spatial context, aiding in spatial 
+analysis and interpretation.
+
+The custom function `getNeighbourMean` is used to calculate, for each cell, the 
+mean logcount expression of the nearest 5 cells, and setting 
+`includeSelf = FALSE` indicates that the expression of the cell is not 
+included in the mean calculation.
+
+We will include the `logcounts_neighbours` assay to the existing `spe` object 
+so that we can use the `plotReducedDim` function to easily visualise both sets 
+of features side-by-side, in this case for the ERBB2 gene.
+
+We are also going to **concatenate** these newly computed neighbourhood features
+to the per-cell logcounts of our `spe` object. We will retain this data matrix
+as the `concatenated_logcounts` object.
+
+```{r}
+logcounts_neighbours = getNeighbourMean(spe,
+                                        assayName = "logcounts",
+                                        spatialReducedDim = "spatial",
+                                        kval = 5,
+                                        includeSelf = FALSE)
+
+assay(spe, "logcounts_neighbours", withDimnames = FALSE) <- logcounts_neighbours
+
+concatenated_logcounts = rbind(assay(spe, "logcounts"), logcounts_neighbours)
+
+plotReducedDim(spe, "spatial", colour_by = "ERBB2", by.assay.type = "logcounts") + 
+  coord_fixed() +
+  ggtitle("logcounts") +
+  plotReducedDim(spe, "spatial", colour_by = "ERBB2", by.assay.type = "logcounts_neighbours") + 
+  coord_fixed() + 
+  ggtitle("logcounts_neighbours")
+```
+
+# StabMap integration of single cell and spatial data
+
+First we like to check that there are no duplicate column names between the 
+`sce` and `spe` objects. Since the data will be integrated, the data need to 
+have unique column names for correct mapping along the mosaic data topology.
+The value below should be 0.
+
+```{r}
+length(intersect(colnames(sce), colnames(spe)))
+```
+
+## Select ONE mosaic integration setting
+
+Below are four chunks that give different settings of the mosaic integration.
+Note that the compiled version of this report will only run Setting 1, you can 
+edit this by changing the code chunk parameter `eval=FALSE` to `eval=TRUE` and
+vice versa.
+
+The most relevant considerations for mosaic integration are:
+
+- Which datasets are being integrated?
+
+- Which features are being included in mosaic integration?
+
+- Which datasets are to be considered as **reference** datasets?
+
+- Whether data needs to be centred and scaled prior to mosaic integration.
+
+For the remainder of this workshop, we will select a few different mosaic
+integration settings and examine the quality and characteristics of the 
+integration results.
+
+### Setting 1
+
+Here we use only the per-cell logcount expression, and we treat both datasets
+as reference datasets. Later on, we will need to reweight the embedding to 
+assign equal weighting to the reference datasets.
+
+```{r setting_1, eval = TRUE}
+stab = stabMap(assay_list = list(
+  "sce" = assay(sce, "logcounts"),
+  "spe" = assay(spe, "logcounts")),
+  reference_list = c("sce", "spe"),
+  plot = FALSE)
+```
+
+### Setting 2 (not run)
+
+Here we use only the per-cell logcount expression, and we treat only the `sce`
+dataset as the reference dataset. This means that the `spe` dataset has no
+influence on the StabMap embedding , and is only projected onto the embedding.
+
+```{r setting_2, eval = FALSE}
+stab = stabMap(assay_list = list(
+  "sce" = assay(sce, "logcounts"),
+  "spe" = assay(spe, "logcounts")),
+  reference_list = c("sce"),
+  plot = FALSE)
+```
+
+### Setting 3 (not run)
+
+This setting is similar to Setting 2 but we choose `spe` as the reference dataset.
+
+```{r setting_3, eval = FALSE}
+stab = stabMap(assay_list = list(
+  "sce" = assay(sce, "logcounts"),
+  "spe" = assay(spe, "logcounts")),
+  reference_list = c("spe"),
+  plot = FALSE)
+```
+
+### Setting 4 (not run)
+
+In this setting, we use the `concatenated_logcounts` data for our spatial 
+integration, and use both datasets as reference datasets. This means that the 
+neighbourhood features that we calculated from `spe` are being used in 
+estimating our StabMap embedding.
+
+```{r setting_4, eval = FALSE}
+stab = stabMap(assay_list = list(
+  "sce" = assay(sce, "logcounts"),
+  "spe" = concatenated_logcounts),
+  reference_list = c("spe", "sce"),
+  plot = FALSE)
+```
+
+Can you think of additional Settings? Add your own chunks to explore.
+
+## Reweight contributions from reference datasets
+
+Now that we have selected a Setting for our StabMap mosaic data integration, we
+may need to reweight contributions from reference datasets.
+
+In any case where we select more than one reference dataset, it may be the case
+that one dataset has more variation present than another. We need to consider
+reweighting the contributions of the multiple reference datasets so that we 
+do not inadvertently give too large a priority for the variation present in one
+reference dataset than another. This becomes important when we use methods that
+calculate euclidean or similar distances, e.g. for clustering.
+
+In practise, this is done by forcing the same total L1 norm for the embedding
+dimensions stemming from each reference dataset.
+
+We also have freedom to assign custom weights to each dataset. In this way,
+we can moderate our prior belief of the quality or comprehensiveness of each
+reference dataset.
+
+### Reweighting 1
+
+Here we use the default to reweight equally.
+
+```{r reweighting_1}
+stab_reweighted = reWeightEmbedding(stab)
+```
+
+### Reweighting 2 (not run)
+
+```{r reweighting_2, eval=FALSE}
+stab_reweighted = reWeightEmbedding(stab,
+                                    weights = c("sce_PC" = 0.8, "spe_PC" = 0.2))
+```
+
+We can visualise the difference by plotting the L1 norms for each embedding 
+dimension before (black open) and after (blue solid) re-weighting.
+
+```{r}
+plot(colSums(abs(stab)),
+     xlab = "Embedding dimension number",
+     ylab = "Total L1 norm",
+     ylim = c(0, max(colSums(abs(cbind(stab, stab_reweighted))))))
+points(colSums(abs(stab_reweighted)), col = "blue", pch = 16)
+```
+
+# Further integration and analysis
+
+In this part we will explore downstream analysis after StabMap mosaic data 
+integration.
+
+## Further horizontal integration
+
+Now that we have performed mosaic integration using StabMap, it is very likely 
+there are  still be technical effects between the cells coming from the `sce` 
+and `spe` datasets. Because StabMap gives us a common low-dimensional 
+embedding, we can implement **any** horizontal integration method that takes 
+the low-dimensional embeddings as input. Examples of such methods include 
+Harmony, scVI, and Mutual Nearest Neighbours (MNN).
+
+In this case, we are going to use the MNN method implemented in the `reducedMNN`
+function. We do this by providing the reweighted StabMap embedding as two
+distinct objects for the `sce` and `spe` derived cells.
+
+```{r}
+mnn_out = reducedMNN(stab_reweighted[colnames(sce),],
+                     stab_reweighted[colnames(spe),])
+
+stabmap_reweighted_corrected = mnn_out[["corrected"]]
+```
+
+## Use the integration to impute missing features
+
+We can use the `imputeEmbedding` function to impute feature values for a given
+set of query cells. The function requires the original data for calculating the
+imputed values, the stabMap embedding to identify the nearest cells, and for the 
+reference and query cell names to be given.
+
+In any of the Imputation cases, we create a `joint_assay_XXX` data matrix that 
+we can use for further visualisation or differential expression testing.
+
+Note that we are free to perform multiple sets of imputation. In general it is 
+a good idea to match the mosaic data integration Setting with the specific
+Imputation choice, e.g. Setting 4 uses the neighbourhood expression features and 
+Imputation 2 imputes the neighbourhood expression of cells, but this is not
+actually required.
+
+Note that each imputation will take a few minutes to run, we will run both 
+Imputation settings.
+
+### Imputation 1
+
+In this Imputation we use the corrected StabMap embedding to impute gene 
+expression of the spatial cells. Then, we combine the imputed and observed 
+logcounts. Because we are going to combine Imputation 1 and 2, we add "_sceRef"
+to the feature names that are imputed using the `sce` cells.
+
+```{r imputation_1}
+imp_sceRef = imputeEmbedding(assay_list = list(sce = assay(sce, "logcounts"),
+                                               spe = assay(spe, "logcounts")),
+                             embedding = stabmap_reweighted_corrected,
+                             reference = colnames(sce),
+                             query = colnames(spe))
+
+joint_assay_sceRef = cbind(assay(sce, "logcounts"), imp_sceRef[["sce"]])
+rownames(joint_assay_sceRef) <- paste0(rownames(joint_assay_sceRef),"_sceRef")
+```
+
+### Imputation 2
+
+In this Imputation we use impute the per-cell and neighbourhood expression, 
+treating the `spe` cells as reference and the `sce` cells as query. As above,
+we combine the imputed and observed features. Similar to above, because we are 
+going to combine Imputation 1 and 2, we add "_seeRef" to the feature names that 
+are imputed using the `sce` cells.
+
+```{r imputation_2}
+imp_speRef = imputeEmbedding(assay_list = list(sce = assay(sce, "logcounts"),
+                                               spe = concatenated_logcounts),
+                             embedding = stabmap_reweighted_corrected,
+                             reference = colnames(spe),
+                             query = colnames(sce))
+
+joint_assay_speRef = cbind(imp_speRef[["spe"]], concatenated_logcounts)
+rownames(joint_assay_speRef) <- paste0(rownames(joint_assay_speRef),"_speRef")
+```
+
+## Combine imputed features with cell metadata into a SingleCellExperiment object
+
+We can use the `SingleCellExperiment` object class to combine our information
+from each data source. This will give us a convenient object to perform
+visualisation and other downstream tasks like clustering or differential 
+expression.
+
+However, `SingleCellExperiment` requires that assays within a single object have
+the same features. Between the two Imputations this is not guaranteed, so we 
+will concatenate these features.
+
+We can create the column metadata using the `combineRows` function, and add a
+column indicating which dataset it belongs to.
+
+```{r}
+joint_cData = combineRows(colData(sce), colData(spe))
+joint_cData$dataset <- ifelse(rownames(joint_cData) %in% colnames(sce), "sce", "spe")
+```
+
+```{r}
+joint_assay = rbind(joint_assay_sceRef[,rownames(joint_cData)],
+                    joint_assay_speRef[,rownames(joint_cData)])
+```
+
+Now we take these components and create the SingleCellExperiment object.
+To avoid overplotting when visualising later, we will randomly shuffle the 
+cell order in the object.
+
+```{r}
+jointSCE = SingleCellExperiment(
+  assays = list(imputed = joint_assay),
+  reducedDims = list(
+    StabMap = stabmap_reweighted_corrected[rownames(joint_cData),],
+    spatial = cbind(joint_cData$x_centroid, joint_cData$y_centroid)
+  ),
+  colData = joint_cData
+)
+jointSCE <- jointSCE[,sample(colnames(jointSCE))]
+jointSCE
+```
+
+In preparation for the next part, we define a colour scheme for the cell types
+and clusters.
+
+First set a colour scheme for the clusters.
+
+```{r}
+clusterCount = length(unique(jointSCE$Cluster))
+clusterPalette = colorRampPalette(brewer.pal(9, "Set1"))(clusterCount)
+```
+
+## Downstream analysis: UMAP Visualisation
+
+We can take the StabMap low dimensional embedding and further reduce this to 
+just two dimensions using UMAP. Then we can visualise these using the `plotUMAP`
+function from the `scater` package. The function generates a `ggplot` object, 
+which can be further customised using the ` + ` operator.
+
+`g1` visualises the cells coloured by dataset, while `g2` visualises the 
+cells according to their annotated cell type.
+
+```{r}
+jointSCE <- runUMAP(jointSCE, dimred = "StabMap")
+
+g1 = plotUMAP(jointSCE, colour_by = "dataset", point_size = 0.5) + 
+  scale_colour_brewer(palette = "Set1") + 
+  theme(legend.position = "bottom") + 
+  guides(colour = guide_legend(title = "", override.aes = list(size = 3)))
+g1
+
+g2 = plotUMAP(jointSCE, colour_by = "Cluster", point_size = 0.5) + 
+  scale_colour_manual(values = clusterPalette) + 
+  theme(legend.position = "bottom") + 
+  guides(colour = guide_legend(title = "", override.aes = list(size = 3)))
+g2
+```
+
+We can note that the 'stromal' label is transcriptionally diverse.
+
+## Downstream analysis: Joint clustering
+
+We can use the StabMap embedding to perform joint clustering of the `sce` and
+`spe` cells. We use the function `clusterRows()` from the `bluster` package to 
+do so. Note that setting the clustering parameter to `NNGraphParam()` indicates
+that graph-based nearest neighbour clustering will be used.
+
+```{r}
+clus = clusterRows(reducedDim(jointSCE, "StabMap"), NNGraphParam())
+jointSCE$joint_cluster = clus
+```
+
+We can visualise the new joint clusters using `plotUMAP()`.
+
+```{r}
+jointclusterCount = length(unique(jointSCE$joint_cluster))
+jointclusterPalette = colorRampPalette(brewer.pal(9, "Set1"))(jointclusterCount)
+
+g3 = plotUMAP(jointSCE, colour_by = "joint_cluster", point_size = 0.5) + 
+  scale_colour_manual(values = jointclusterPalette) +  
+  theme(legend.position = "bottom") + 
+  guides(colour = guide_legend(title = "", override.aes = list(size = 3)))
+g3
+```
+
+## Downstream analysis: Visualisation of spatial coordinates
+
+In addition to visualising the UMAP embedding from StabMap, we can use the 
+`plotReducedDim()` function to plot the spatial locations of the `spe` cells,
+coloured by the annotated cell types and the new joint clusters.
+
+```{r}
+g4 = plotReducedDim(jointSCE, "spatial", 
+                    colour_by = "Cluster", point_size = 0.5) +
+  scale_colour_manual(values = clusterPalette) + coord_fixed() + 
+  theme(legend.position = "bottom") + 
+  guides(colour = guide_legend(title = "", override.aes = list(size = 3)))
+g4
+
+g5 = plotReducedDim(jointSCE, "spatial", 
+                    colour_by = "joint_cluster", point_size = 0.5) +
+  scale_colour_manual(values = jointclusterPalette) + coord_fixed() + 
+  theme(legend.position = "bottom") + 
+  guides(colour = guide_legend(title = "", override.aes = list(size = 3)))
+g5
+```
+
+## Downstream analysis: Visualisation of imputed features
+
+We can also plot the spatial coordinates according to the imputed gene 
+expression values. For example, the gene FCGR2A is not measured in the Xenium
+experiment, but we can use our StabMap embedding to obtain our best estimate.
+
+```{r}
+gene = "FCGR2A"
+
+g6 = plotReducedDim(jointSCE, "spatial",
+                    colour_by = paste0(gene, "_sceRef"),
+                    by_exprs_values = "imputed")
+g6
+```
+
+Interestingly, we can also use the imputation of the spatial neighbours to
+visualise our best guess of neighbourhood expression of our `sce` cells. For 
+example, we can take the gene CD14, which is a marker for immune cells, and 
+examine the imputed neighbourhood expression. In this case, it's helpful for us
+to facet our visualisation by the dataset to check our results.
+
+```{r}
+gene = "CXCR4"
+
+g7 = plotReducedDim(jointSCE, "UMAP",
+                    colour_by = paste0(gene, "_neighbours", "_speRef"),
+                    by_exprs_values = "imputed",
+                    other_fields = list("dataset")) + 
+  facet_wrap(~dataset)
+g7
+```
+
+Our visualisation of imputed neighbourhood expression suggests there is high
+neighbourhood expression among B cells, but also among a subset of stromal 
+cells.
+
+## Aside: Interactive visualisation
+
+While not specifically about StabMap, when performing integration of single
+cell and spatial data, it is very helpful to work with interactive visualisation
+tools. One example is `plotly` package, and in particular the `ggplotly()` 
+function. We can take any plot we generated above and visualise interactively,
+and hover over the cells to examine further.
+
+```{r}
+ggplotly(g2)
+```
+
+For data where we have access to muliple low-dimensional embeddings, we can use
+the custom function `plotReducedDimGirafe()` that is provided as part of this
+workshop. We can use the lasso tool to identify which cells are present in 
+different locations.
+
+```{r}
+plotReducedDimGirafe(jointSCE)
+```
+
+# Conclusions and further resources
+
+This workshop aimed to guide through integration of single-cell RNA sequencing 
+(scRNA-seq) data with spatial omics data using the StabMap package. By 
+leveraging various settings for mosaic data integration and reweighting 
+contributions from reference datasets, we have covered how to effectively 
+combine information from dissociated single-cell profiles and spatial 
+expression data.
+
+Further resources:
+
+- Orchestrating single-cell analysis using Bioconductor https://bioconductor.org/books/release/OSCA/
+
+- StabMap package website https://marionilab.github.io/StabMap/
+
+- StabMap Paper https://www.nature.com/articles/s41587-023-01766-z
+
+- Contact `shila.ghazanfar@sydney.edu.au`
+
+# Acknowledgements and sessionInfo()
+
+Thank you to the following for their careful feedback on this workshop:
+
+- Aiden Jin, The University of Sydney
+- Harald Vohringer, EMBL
+
+```{r}
+sessionInfo()
+```
