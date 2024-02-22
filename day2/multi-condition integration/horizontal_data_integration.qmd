@@ -11,33 +11,41 @@ format:
     toc: true 
     code-line-numbers: false 
 bibliography: references.bib
+params:
+  skip_execution: false
+  skip_slow_chunks: true
+  skip_answers: true
 ---
 
 ![Figure 1 from *Computational principles and challenges in single-cell data integration* by @argelaguet2021. Horizontal data integration is concerned with relating cells measured in different conditions or batches where we have the same features (i.e., genes) for the cells.](images/horizontal_integration_screenshot.png)
 
-To start we will load the `tidyverse` packages and `SingleCellExperiment`:
+To start, we will load the `tidyverse` and `SingleCellExperiment` packages:
 
 ```{r}
 #| label: load_packages
 #| output: false
+#| eval: !expr (! params$skip_execution)
 library(tidyverse)
 library(SingleCellExperiment)
 ```
 
 # Example data
 
-For this tutorial, we will use a popular dataset by @kang2018. The dataset measured the effect of interferon-$\beta$ stimulation on blood cells from eight patients. The [`muscData`](https://bioconductor.org/packages/muscData/) package provides an easy way to access the data as a [`SingleCellExperiment`](https://bioconductor.org/books/release/OSCA.intro/the-singlecellexperiment-class.html).
+We will use a popular dataset by @kang2018 for this tutorial. The dataset measured the effect of interferon-$\beta$ stimulation on blood cells from eight patients. The [`muscData`](https://bioconductor.org/packages/muscData/) package provides an easy way to access the data as a [`SingleCellExperiment`](https://bioconductor.org/books/release/OSCA.intro/the-singlecellexperiment-class.html). 
+In case downloading the data with the `muscData` package fails, you can also directly download the file from <http://oc.embl.de/index.php/s/tpbYcH5P9NfXeM5> and load it into R using `sce <- readRDS("~/Downloads/PATH_TO_THE_FILE")`.
 
 ```{r}
 #| label: load_kang_data
+#| eval: !expr (! isTRUE(params$skip_execution))
 sce <- muscData::Kang18_8vs8()
 sce
 ```
 
-We log-transform the data to account for the heteroskedasticity, perform PCA to reduce the dimensions, and run UMAP for visualization. For the preprocessing, we will use [`scater`](https://bioconductor.org/packages/scater/) package which adds a new assay called `"logcounts"` and two `reducedDims(sce)` called `"PCA"` and `"UMAP"` . Equivalent steps exist in Seurat or scanpy.
+We log-transform the data to account for the heteroskedasticity of the counts, perform PCA to reduce the dimensions, and run UMAP for visualization. For the preprocessing, we will use the [`scater`](https://bioconductor.org/packages/scater/) package, which adds a new assay called `"logcounts"` and two `reducedDims(sce)` called `"PCA"` and `"UMAP"` to the `SummarizedExperiment` object. Equivalent preprocessing functions also exist in Seurat or scanpy.
 
 ```{r}
 #| label: kang_preprocess
+#| eval: !expr (! isTRUE(params$skip_execution))
 sce <- scater::logNormCounts(sce)
 hvg <- order(MatrixGenerics::rowVars(logcounts(sce)), decreasing = TRUE)
 sce <- sce[hvg[1:500], ]
@@ -45,26 +53,45 @@ sce <- scater::runPCA(sce, ncomponents = 50)
 sce <- scater::runUMAP(sce, dimred = "PCA")
 ```
 
-To visualize the data, we use `ggplot2`
+To visualize the data, we use `ggplot2`. This is often more verbose than calling an existing function (e.g., `scater::plotReducedDim(sce, "UMAP", color_by = "stim")`) but has the advantage that the plots are easier to customize.
+
+In the UMAP, the cells separate by treatment status (`"stim"`) and cell type (`"cell"`). The goal of this tutorial is to understand how different models adjust for the known treatment status and integrate the data into a shared embedding.
 
 ```{r}
 #| label: fig-kang-umap
 #| fig-cap: UMAP of log transformed counts
-as_tibble(colData(sce)) |>
+#| eval: !expr (! isTRUE(params$skip_execution))
+pl1 <- as_tibble(colData(sce)) |>
   mutate(umap = reducedDim(sce, "UMAP")) |>
   ggplot(aes(x = umap[,1], y = umap[,2])) +
     geom_point(aes(color = stim), size = 0.3) +
     coord_fixed()
 ```
 
+This dataset already comes with cell type annotations. The cell type labels are helpful for interpreting the results; however, for the purpose of this tutorial, we will not need them and will ignore them from now on.
+
+```{r}
+#| label: fig-kang-umap2
+#| fig-cap: Cell type labels
+#| eval: !expr (! isTRUE(params$skip_execution))
+pl2 <- as_tibble(colData(sce)) |>
+  mutate(umap = reducedDim(sce, "UMAP")) |>
+  ggplot(aes(x = umap[,1], y = umap[,2])) +
+    geom_point(aes(color = cell), size = 0.3) +
+    ggrepel::geom_text_repel(data = \(dat) dat |> summarize(umap = matrix(colMedians(umap), nrow = 1), .by = c(stim, cell)),
+              aes(label = cell)) +
+    coord_fixed()
+```
+
+
 ::: {.callout-note collapse="true"}
-## Challenge: Do the preprocessing with Seurat (click to see result)
+## Challenge: Do the preprocessing with Seurat (click to see results)
 
 The following code is based on Seurat's [*Guided Clustering Tutorial*](https://satijalab.org/seurat/archive/v3.0/pbmc3k_tutorial.html).
 
 ```{r}
 #| label: seurat-preprocessing
-#| eval: false
+#| eval: !expr (! params$skip_execution && ! params$skip_answers)
 # For more information about the conversion see `?as.Seurat.CellDataSet`
 seur_obj <- Seurat::as.Seurat(muscData::Kang18_8vs8(), data = NULL)
 seur_obj <- Seurat::NormalizeData(seur_obj, normalization.method = "LogNormalize", scale.factor = 10000)
@@ -77,22 +104,22 @@ seur_obj <-Seurat::RunUMAP(seur_obj, dims = 1:10)
 ```
 
 ```{r}
-#| label: seurat-plot
-#| caption: "UMAP plot after preprocessing with Seurat"
-#| eval: false
+#| label: fig-seurat-plot
+#| fig-cap: "UMAP plot after preprocessing with Seurat"
+#| eval: !expr (! params$skip_execution && !params$skip_answers)
 Seurat::DimPlot(seur_obj, reduction = "umap", group.by = "stim")
 ```
 :::
 
-@fig-kang-umap shows that the data separates by the treatment status. For many downstream analyses, it would be good to know how the cells from the stimulated condition are related to the cells from the control condition. For example for cell type assignment, we might want to annotate both conditions together and want to discount the effect of the treatment. This process is called **integration**.
+# Data integration
 
-The goal is get a low-dimensional embedding of the cells where the stimulation does not affect the embedding and all residual variance comes from different cell states. @fig-integrated_picture shows a sucessfully integrated example.
+@fig-kang-umap shows that the data separates by the treatment status. For many downstream analyses, it would be good to know how the cells from the stimulated condition are related to the cells from the control condition. For example for cell type assignment, we might want to annotate both conditions together and ignore the effect of the treatment. This process is called **integration**.
 
-![UMAP of a succesfully integrated dataset.](images/integrated_data_picture.png){#fig-integrated_picture}
+The goal is a low-dimensional embedding of the cells where the treatment status does not affect the embedding and all residual variance comes from different cell states. @fig-integrated_picture shows a successfully integrated example.
 
-# Integration approaches
+![UMAP of a successfully integrated dataset.](images/integrated_data_picture.png){#fig-integrated_picture}
 
-There are many methods for single-cell data integration and @luecken2022 benchmarked several approaches. Here, I will present four integration methods which are easy to use from R and cover a useful set of features:
+There are many methods for single-cell data integration, and @luecken2022 benchmarked several approaches. Here, I will present four integration methods that are easy to use from R and cover a useful set of features:
 
 -   Manual projection
 -   Automated integration
@@ -103,59 +130,78 @@ There are many methods for single-cell data integration and @luecken2022 benchma
 
 ## Manual Projection
 
-![Schematic picture of data from two conditions with the linear subspace that approximates the control condition](images/Subspace_illustration_both_condition_projection.png)
+![Schematic picture of data from two conditions. The data from the treated condition is projected onto the subspace spanned by the control condition.](images/Subspace_illustration_both_condition_projection.png){#fig-ctrl-proj width="40%"}
+
+In transcriptomic data analysis, each cell is characterized by its gene expression values. In our case, these are the 500 most variable genes. Accordingly, each cell is a point in a 500-dimensional _gene expression_ space. Principal component analysis (PCA) finds a $P$-dimensional space with minimal distance to each cell. 
+
+To make these concepts more tangible, I created a cartoon shown in Figure @fig-ctrl-proj. The orange blob represents all cells from the control condition in a 3-dimensional gene expression space. The grey rectangle $R$ is a lower-dimensional subspace covering the shape of the orange blob. The shape of the blue blob (i.e., the treated cells) resembles the orange blob but is slightly offset. To integrate both conditions, we can project each point from the blue blob onto the subspace covering the orange blob.
+
+We can implement this procedure in a few lines of R code:
+
+1. We create a matrix for the cells from the control and treated conditions,
+2. we fit PCA on the control cells,
+3. we center the data, and finally
+4. we project the cells from both conditions onto the subspace of the control condition
 
 ```{r}
-ctrl_mat <- logcounts(sce)[,sce$stim == "ctrl"]
-stim_mat <- logcounts(sce)[,sce$stim == "stim"]
+#| label: manual-proj
+#| eval: !expr (! params$skip_execution)
+# Each column from the matrix is the coordinate of a cell in the 500-dimensional space
+ctrl_mat <- as.matrix(logcounts(sce)[,sce$stim == "ctrl"])
+stim_mat <- as.matrix(logcounts(sce)[,sce$stim == "stim"])
 
 ctrl_centers <- rowMeans(ctrl_mat)
 stim_centers <- rowMeans(stim_mat)
 
-ctrl_pca <- irlba::prcomp_irlba(t(ctrl_mat - ctrl_centers), n = 20, center = FALSE)
-ctrl_proj <- t(ctrl_pca$rotation) %*% (ctrl_mat - ctrl_centers)
-stim_proj <- t(ctrl_pca$rotation) %*% (stim_mat - stim_centers)
+# `prcomp` is R's name for PCA and IRLBA is an algorithm to calculate it.
+ctrl_pca <- irlba::prcomp_irlba(t(ctrl_mat - ctrl_centers), n = 20)
 
-manual_proj <- matrix(NA, nrow = 20, ncol = ncol(sce))
-manual_proj[,sce$stim == "ctrl"] <- as.matrix(ctrl_proj)
-manual_proj[,sce$stim == "stim"] <- as.matrix(stim_proj)
+# With a little bit of linear algebra, we project the points onto the subspace of the control cells
+integrated_mat <- matrix(NA, nrow = 20, ncol = ncol(sce))
+integrated_mat[,sce$stim == "ctrl"] <- t(ctrl_pca$rotation) %*% (ctrl_mat - ctrl_centers)
+integrated_mat[,sce$stim == "stim"] <- t(ctrl_pca$rotation) %*% (stim_mat - stim_centers)
 ```
 
-```{r}
-#| label: manual-umap
-#| caption: UMAP of log transformed counts
-#| collapse: true
+We check that our implementation works, by looking at the UMAP of the integrated data. 
 
-manual_proj_umap <- uwot::umap(t(manual_proj))
+```{r}
+#| label: fig-manual-umap
+#| fig-cap: UMAP of log transformed counts
+#| collapse: true
+#| eval: !expr (! params$skip_execution)
+
+int_mat_umap <- uwot::umap(t(integrated_mat))
 
 as_tibble(colData(sce)) |>
-  mutate(umap = manual_proj_umap) |>
+  mutate(umap = int_mat_umap) |>
   sample_frac() |>
   ggplot(aes(x = umap[,1], y = umap[,2])) +
     geom_point(aes(color = stim), size = 0.3) +
     coord_fixed()
 ```
 
+The overlap is not perfect, but better than in @fig-kang-umap!
+
 ::: {.callout-note collapse="true"}
 ## Challenge: What happens if you project on the `"stim"` condition?
 
-![Schematic picture of data from two conditions using the stimulated condition as reference.](images/Subspace_illustration_both_condition_projection2.png)
+![Schematic picture of data from two conditions using the stimulated condition as reference.](images/Subspace_illustration_both_condition_projection2.png){width="40%"}
 
 The projection is orthogonal onto the subspace, which means it matters which condition is chosen as reference.
 
 ```{r}
+#| label: rev-manual-proj
+#| eval: !expr (! params$skip_execution && ! params$skip_answers)
 stim_pca <- irlba::prcomp_irlba(t(stim_mat - stim_centers), n = 20, center = FALSE)
-ctrl_proj2 <- t(stim_pca$rotation) %*% (ctrl_mat - ctrl_centers)
-stim_proj2 <- t(stim_pca$rotation) %*% (stim_mat - stim_centers)
 
-manual_proj2 <- matrix(NA, nrow = 20, ncol = ncol(sce))
-manual_proj2[,sce$stim == "ctrl"] <- as.matrix(ctrl_proj2)
-manual_proj2[,sce$stim == "stim"] <- as.matrix(stim_proj2)
+integrated_mat2 <- matrix(NA, nrow = 20, ncol = ncol(sce))
+integrated_mat2[,sce$stim == "ctrl"] <- t(stim_pca$rotation) %*% (ctrl_mat - ctrl_centers)
+integrated_mat2[,sce$stim == "stim"] <- t(stim_pca$rotation) %*% (stim_mat - stim_centers)
 
-manual_proj_umap2 <- uwot::umap(t(manual_proj2))
+int_mat_umap2 <- uwot::umap(t(integrated_mat2))
 
 as_tibble(colData(sce)) |>
-  mutate(umap = manual_proj_umap2) |>
+  mutate(umap = int_mat_umap2) |>
   sample_frac() |>
   ggplot(aes(x = umap[,1], y = umap[,2])) +
     geom_point(aes(color = stim), size = 0.3) +
@@ -166,7 +212,7 @@ For this example, using the `"stim"` condition as the reference leads to a worse
 :::
 
 ::: {.callout-warning collapse="true"}
-## Brain teaser: How can you make the manual projection approach work for more complex experimental designs?
+## Brain teaser: How can you make the manual projection approach work for any complex experimental designs?
 
 The projection approach consists of three steps:
 
@@ -174,29 +220,35 @@ The projection approach consists of three steps:
 2.  Choosing a reference condition and calculating the subspace that approximates the data from the reference condition (`irlba::prcomp_irlba(t(stim_mat - stim_centers))$rotation`).
 3.  Projecting the data from the other conditions onto that subspace (`t(ctrl_pca$rotation) %*% (stim_mat - stim_centers)`).
 
-For arbitrary experimental designs, we can perform the centering with a linear model fit:
+For arbitrary experimental designs, we can perform the centering with a linear model fit. The second step remains the same. And after calculating the centered matrix, the third step is also straight forward. Below are the outlines how such a general procedure would work.
 
 ```{r}
+#| label: challenge-complex-manual-adjustment
 #| eval: false
 # A complex experimental design
 lm_fit <- lm(t(logcounts(sce)) ~ condition + batch, data = colData(sce))
+# The `residuals` function returns the coordinates minus the mean at the condition.
 centered_mat <- t(residuals(lm_fit))
 # Assuming that `is_reference_condition` contains a selection of the cells
 ref_pca <- irlba::prcomp_irlba(centered_mat[,is_reference_condition], ...)
-proj_mat <- t(ref_pca$rotation) %*% centered_mat
+int_mat <- t(ref_pca$rotation) %*% centered_mat
 ```
 :::
 
 ## Automatic integration
 
+In the following, I show three approaches for automatically integrating the data. You don't need to run all three. Usually, you pick the method that you like best. Here, I provide the code for all three so that you can compare for yourself.
+
 ### Harmony
 
-One popular tool for data integration is Harmony [@korsunsky2019]. Harmony is build around _maximum diversity clustering_ [@fig-harmony_schematic], which in addition to minimizing the distance of each data point to a cluster center also maximizes the mixing of conditions assigned to each cluster.
+Harmony is one popular tool for data integration [@korsunsky2019]. Harmony is relatively fast and can handle more complex experimental designs than just a treatment/control setup. It is built around _maximum diversity clustering_ (@fig-harmony_schematic). Unlike classical clustering algorithms, maximum diversity clustering not just minimizes the distance of each data point to a cluster center but also maximizes the mixing of conditions assigned to each cluster.
 
 ![Schematic of Harmony. Screenshot from Fig. 1 of @korsunsky2019](images/harmony_schematic.png){#fig-harmony_schematic}
 
 ```{r}
 #| label: harmony_integration
+#| eval: !expr (! params$skip_execution)
+# Warning: You need `packageVersion("harmony") >= "1.0.0"` for this to work.
 harm_mat <- harmony:::RunHarmony(reducedDim(sce, "PCA"), colData(sce), 
                                  vars_use = c("stim"))
 harm_umap <- uwot::umap(harm_mat)
@@ -211,12 +263,13 @@ as_tibble(colData(sce)) |>
 
 ### MNN
 
-MNN is short for mutual nearest neighbors and was invented for integrating two conditions by identifying the cells which are mutually nearest neighbors [@fig-mnn_schematic]. The [`batchelor`](https://bioconductor.org/packages/batchelor/) provides an efficient implementation which can also handle experimental designs with more than two conditions.
+MNN is short for mutual nearest neighbors and was invented for integrating two conditions by identifying the cells that are mutually nearest neighbors [@fig-mnn_schematic]. The [`batchelor`](https://bioconductor.org/packages/batchelor/) package provides an efficient implementation that can also handle experimental designs with more than two conditions.
 
-![Schematic of MNN Screenshot from Fig. 1 of @haghverdi2018](images/mnn_schematic.png){#fig-mnn_schematic}
+![Schematic of MNN Screenshot from Fig. 1 of @haghverdi2018](images/mnn_schematic.png){#fig-mnn_schematic width="40%"}
 
 ```{r}
 #| label: mnn_integration
+#| eval: !expr (! params$skip_execution)
 mnn_sce <- batchelor::fastMNN(sce, batch = sce$stim, BSPARAM=BiocSingular::IrlbaParam())
 mnn_umap <- uwot::umap(reducedDim(mnn_sce, "corrected"))
 
@@ -228,34 +281,61 @@ as_tibble(colData(sce)) |>
     coord_fixed()
 ```
 
+Seurat's integration method is very similar to MNN (however, it calls the mutual nearest neighbors _integration anchors_). The main difference is that Seurat uses CCA instead of PCA for dimensionality reduction [@butler2018].
+
+```{r}
+#| label: fig-seurat_integration
+#| fig-caption: "Seurat's anchor integration"
+#| eval: !expr (! params$skip_execution && ! params$skip_slow_chunks)
+
+# This code only works with Seurat v5!
+seur_obj2 <- Seurat::as.Seurat(muscData::Kang18_8vs8(), data = NULL)
+seur_obj2[["originalexp"]] <- split(seur_obj2[["originalexp"]], f = seur_obj2$stim)
+seur_obj2 <- Seurat::NormalizeData(seur_obj2, normalization.method = "LogNormalize", scale.factor = 10000)
+seur_obj2 <- Seurat::FindVariableFeatures(seur_obj2, selection.method = "vst", nfeatures = 500)
+seur_obj2 <- Seurat::ScaleData(seur_obj2)
+seur_obj2 <- Seurat::RunPCA(seur_obj2, verbose = FALSE)
+
+seur_obj2 <- Seurat::IntegrateLayers(object = seur_obj2, method = Seurat::CCAIntegration, orig.reduction = "pca", new.reduction = "integrated.cca", verbose = FALSE)
+seur_obj2 <- Seurat::RunUMAP(seur_obj2, dims = 1:30, reduction = "integrated.cca")
+Seurat::DimPlot(seur_obj2, reduction = "umap", group.by = "stim")
+```
+
+
+
 # Invertible Integration
 
-Tools like MNN and Harmony take a PCA embedding and remove the effects of the specified covariates. But there is no way to go back from the integrated embedding to the original gene space. This means that we cannot ask the counter factual what the expression of a cell from the control condition would have been, had it been treated.
+Tools like MNN and Harmony take a PCA embedding and remove the effects of the specified covariates. However, there is no way to go back from the integrated embedding to the original gene space. This means that we cannot ask the counterfactual what the expression of a cell from the control condition would have been, had it been treated.
 
 A new tool called [LEMUR](https://bioconductor.org/packages/lemur/) provides this functionality by matching the subspace of each condition [@ahlmann-eltze2023]. @fig-subspace_matching illustrates the principle.
 
-![Schematic picture of data from two conditions with the respective linear subspace.](images/Subspace_illustration_both_condition_with_arrow.png){#fig-subspace_matching}
+![Schematic picture of data from two conditions with the respective linear subspace.](images/Subspace_illustration_both_condition_with_arrow.png){#fig-subspace_matching width="40%"}
 
 LEMUR takes as input a `SingleCellExperiment` object, the specification of the experimental design, and the number of latent dimensions. To refine the embedding, we will use the provided cell type annotations.
 ```{r}
+#| label: fit-lemur-model
+#| eval: !expr (! params$skip_execution)
 fit <- lemur::lemur(sce, design = ~ stim, n_embedding = 30, verbose = FALSE)
 fit <- lemur::align_by_grouping(fit, fit$colData$cell, verbose = FALSE)
 ```
 
 ::: {.callout-note collapse="true"}
-## Challenge: How refine the embedding of LEMUR with an automated tool?
+## Challenge: How to refine the embedding of LEMUR with an automated tool?
 
 ```{r}
+#| label: align-lemur-model
+#| eval: !expr (! params$skip_execution & ! params$skip_answers)
 fit <- lemur::lemur(sce, design = ~ stim, n_embedding = 30, verbose = FALSE)
 fit <- lemur::align_harmony(fit, verbose = FALSE)
 ```
 :::
 
-Making a UMAP plot of LEMUR's embedding shows that it sucessfully integrated the conditions (@fig-lemur_umap).
+Making a UMAP plot of LEMUR's embedding shows that it successfully integrated the conditions (@fig-lemur_umap).
 
 ```{r}
 #| label: fig-lemur_umap
 #| fig-cap: "UMAP plot of LEMUR's invertible embedding."
+#| eval: !expr (! params$skip_execution)
 lemur_umap <- uwot::umap(t(fit$embedding))
 
 as_tibble(colData(sce)) |>
@@ -266,13 +346,14 @@ as_tibble(colData(sce)) |>
     coord_fixed()
 ```
 
-The advantage of the invertible integration is that we can make predictions what the expression of a cell from the control condition would have been, had it been stimulated and vice versa. Contrasting those predictions tells us how much the gene expression changes for that cell in any gene.
+The advantage of the invertible integration is that we can predict what a cell's expression from the control condition would have been, had it been stimulated and vice versa. Contrasting those predictions tells us how much the gene expression changes for that cell in any gene.
 
-![Differential expression with an invertible integration](images/differential_expression.png){width="80%"}
+![Differential expression with an invertible integration](images/differential_expression.png){width="60%"}
 
 We call LEMUR's `test_de` function to compare the expression values in the `"stim"` and `"ctrl"` conditions.
 ```{r}
 #| label: lemur-calc-de
+#| eval: !expr (! params$skip_execution)
 fit <- lemur::test_de(fit, contrast = cond(stim = "stim") - cond(stim = "ctrl"))
 ```
 
@@ -284,6 +365,7 @@ We can now pick individual genes and plot the predicted log fold change for each
 #| fig-cap: 
 #|   - "Expression of _PLSCR1_ in control and stim condition"
 #|   - "LEMUR's prediction of differential expression"
+#| eval: !expr (! params$skip_execution)
 as_tibble(colData(sce)) |>
   mutate(umap = lemur_umap) |>
   mutate(expr = logcounts(fit)["PLSCR1",]) |>
@@ -305,9 +387,11 @@ as_tibble(colData(sce)) |>
 ```
 
 ::: {.callout-note collapse="true"}
-## Challenge: How to LEMUR to find groups of cells with consistent differential expression?
+## Challenge: How can you use LEMUR to find groups of cells with consistent differential expression?
 
 ```{r, paged.print=FALSE}
+#| label: find-neighborhood-lemur
+#| eval: !expr (! params$skip_execution & ! params$skip_answers)
 nei <- lemur::find_de_neighborhoods(fit, group_by = vars(stim, ind), verbose = FALSE)
 as_tibble(nei) %>%
   arrange(pval)
