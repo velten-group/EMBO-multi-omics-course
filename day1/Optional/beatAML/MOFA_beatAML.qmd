@@ -231,7 +231,7 @@ MOFAobject <- prepare_mofa(MOFAobject,
 
 Training
 ```{r}
-MOFAobject <- run_mofa(MOFAobject)
+MOFAobject <- run_mofa(MOFAobject, use_basilisk = TRUE)
 ```
 
 
