@@ -146,7 +146,7 @@ MOFAobject = prepare_mofa(MOFAobject, model_options = model_opts)
 
 Train the model: this should take ~5min.
 ```{r, message=FALSE, warning=FALSE}
-MOFAobject = run_mofa(MOFAobject)
+MOFAobject = run_mofa(MOFAobject, use_basilisk = TRUE)
 ```
 
 
