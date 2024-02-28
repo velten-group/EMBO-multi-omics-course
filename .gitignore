@@ -1,3 +1,4 @@
+*.h5ad
 .ipynb_checkpoints
 .DS_Store
 .Rproj.user
