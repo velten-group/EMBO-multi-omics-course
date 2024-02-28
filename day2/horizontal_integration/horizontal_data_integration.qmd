@@ -41,17 +41,69 @@ sce <- muscData::Kang18_8vs8()
 sce
 ```
 
+
+::: {.callout-note collapse="true"}
+## Challenge: How many genes and cells are in the data? How do you find the metadata about each cell / gene?
+
+You can find the number of genes and cells when printing the summary of the `sce`. Alternatively, you can use `nrow(sce)`, `ncol(sce)`, or `dim(sce)` to gt these values.
+
+In a `SingleCellExperiment` object, the meta information about each cell using `colData(sce)` and for each gene with `rowData(sce)`. 
+
+Follow-up question: why does the documentation for `colData` (run `?colData` in the R console) talk about `SummarizedExperiment` objects instead of `SingleCellExperiment`?
+:::
+
 We log-transform the data to account for the heteroskedasticity of the counts, perform PCA to reduce the dimensions, and run UMAP for visualization. For the preprocessing, we will use the [`scater`](https://bioconductor.org/packages/scater/) package, which adds a new assay called `"logcounts"` and two `reducedDims(sce)` called `"PCA"` and `"UMAP"` to the `SummarizedExperiment` object. Equivalent preprocessing functions also exist in Seurat or scanpy.
 
 ```{r}
 #| label: kang_preprocess
-#| eval: !expr (! isTRUE(params$skip_execution))
+#| eval: !expr (! params$skip_execution)
 sce <- scater::logNormCounts(sce)
 hvg <- order(MatrixGenerics::rowVars(logcounts(sce)), decreasing = TRUE)
 sce <- sce[hvg[1:500], ]
 sce <- scater::runPCA(sce, ncomponents = 50)
 sce <- scater::runUMAP(sce, dimred = "PCA")
 ```
+
+::: {.callout-note collapse="true"}
+## Challenge: How would you do a sctransform-like transformation (i.e., Pearson residuals) without using Seurat?
+
+The [transformGamPoi](https://bioconductor.org/packages/release/bioc/vignettes/transformGamPoi/inst/doc/transformGamPoi.html) package from Bioconductor provides a `residual_transform` function.
+
+```{r}
+#| label: sctransform_alternative
+#| eval: !expr (! params$skip_execution && ! params$skip_slow_chunks)
+assay(sce, "pearson_residuals") <- transformGamPoi::residual_transform(sce, residual = "pearson", on_disk = FALSE)
+```
+:::
+
+::: {.callout-note collapse="true"}
+## Question: What is the problem with using very few components for PCA? Is there also a problem with using too many?
+
+Too few dimensions for PCA mean that it cannot capture enough of the relevant variation in the data. This leads to a loss of subtle differences between cell states.
+
+Too many dimensions for PCA can also pose a problem. PCA smoothes out the Poisson noise uncorrelated that is orthogonal to the biological signal. If too many PCA components are included, the additional dimensions capture the noise that can obscure relevant differences. For more details see Fig. 2d in @ahlmann-eltze2023.
+:::
+
+::: {.callout-note collapse="true"}
+## Challenge: How can you use tSNE instead of UMAP? What are alternative visualization methods?
+
+The scater package also provides a `runTSNE` function
+
+```{r}
+#| label: run_tsne
+#| eval: !expr (! params$skip_execution && ! params$skip_slow_chunks)
+sce <- scater::runTSNE(sce, dimred = "PCA")
+```
+
+On the one hand, tSNE and UMAP are defacto standards for visualizing the cell states in single cell data analysis. On the other hand, they are often criticized for failing to represent global structure and distorting differences in the data (just look at twitter). A number of alternatives have been suggested:
+
+- Force directed layout of the $k$ nearest neighbor (kNN) graph ([igraph](https://igraph.org/r/doc/layout_with_fr.html)),
+- [PHATE](https://github.com/KrishnaswamyLab/PHATE)
+- [IVIS](https://bering-ivis.readthedocs.io/en/latest/index.html)
+- Unification of tSNE and UMAP using contrastive learning ([Böhm, 2023](https://arxiv.org/pdf/2210.09879.pdf))
+:::
+
+
 
 To visualize the data, we use `ggplot2`. This is often more verbose than calling an existing function (e.g., `scater::plotReducedDim(sce, "UMAP", color_by = "stim")`) but has the advantage that the plots are easier to customize.
 
@@ -60,8 +112,8 @@ In the UMAP, the cells separate by treatment status (`"stim"`) and cell type (`"
 ```{r}
 #| label: fig-kang-umap
 #| fig-cap: UMAP of log transformed counts
-#| eval: !expr (! isTRUE(params$skip_execution))
-pl1 <- as_tibble(colData(sce)) |>
+#| eval: !expr (! params$skip_execution)
+as_tibble(colData(sce)) |>
   mutate(umap = reducedDim(sce, "UMAP")) |>
   ggplot(aes(x = umap[,1], y = umap[,2])) +
     geom_point(aes(color = stim), size = 0.3) +
@@ -73,8 +125,8 @@ This dataset already comes with cell type annotations. The cell type labels are 
 ```{r}
 #| label: fig-kang-umap2
 #| fig-cap: Cell type labels
-#| eval: !expr (! isTRUE(params$skip_execution))
-pl2 <- as_tibble(colData(sce)) |>
+#| eval: !expr (! params$skip_execution)
+as_tibble(colData(sce)) |>
   mutate(umap = reducedDim(sce, "UMAP")) |>
   ggplot(aes(x = umap[,1], y = umap[,2])) +
     geom_point(aes(color = cell), size = 0.3) +
@@ -127,6 +179,20 @@ There are many methods for single-cell data integration, and @luecken2022 benchm
     -   MNN
 -   Invertible integration
     -   LEMUR
+    
+::: {.callout-note collapse="true"}
+## Question: In this tutorial we will just look at plots to assess integration success. Why is that suboptimal? How can we do better?
+
+A 2D embedding like UMAP or tSNE gives us a first impression if cells from different conditions are mixed, but the results are not quantitative which means we cannot directly compare the outcome.
+
+One simple metric to measure integration success is to see how mixed the conditions are. For example we can count for each cell how many of the nearest neighbors come from the same condition and how many come from the other conditions. For more information see @luecken2022.
+
+Follow-up challenge: Write a function to calculate the mixing metric.
+
+Follow-up questions: Can you write an integration function, that scores perfectly on the integration metric? Hint: it can be biologically completely useless. What else would you need to measure to protect against such a pathological example.
+
+:::
+
 
 ## Manual Projection
 
@@ -249,7 +315,7 @@ Harmony is one popular tool for data integration [@korsunsky2019]. Harmony is re
 #| label: harmony_integration
 #| eval: !expr (! params$skip_execution)
 # Warning: You need `packageVersion("harmony") >= "1.0.0"` for this to work.
-harm_mat <- harmony:::RunHarmony(reducedDim(sce, "PCA"), colData(sce), 
+harm_mat <- harmony::RunHarmony(reducedDim(sce, "PCA"), colData(sce), 
                                  vars_use = c("stim"))
 harm_umap <- uwot::umap(harm_mat)
 
@@ -260,6 +326,10 @@ as_tibble(colData(sce)) |>
     geom_point(aes(color = stim), size = 0.3) +
     coord_fixed()
 ```
+
+::: {.callout-note}
+## Challenge: How much do the results change if you change the default parameters in Harmony?
+:::
 
 ### MNN
 
@@ -280,6 +350,10 @@ as_tibble(colData(sce)) |>
     geom_point(aes(color = stim), size = 0.3) +
     coord_fixed()
 ```
+
+::: {.callout-note}
+## Challenge: How much do the results change if you change the default parameters in MNN?
+:::
 
 Seurat's integration method is very similar to MNN (however, it calls the mutual nearest neighbors _integration anchors_). The main difference is that Seurat uses CCA instead of PCA for dimensionality reduction [@butler2018].
 
@@ -307,7 +381,7 @@ Seurat::DimPlot(seur_obj2, reduction = "umap", group.by = "stim")
 
 Tools like MNN and Harmony take a PCA embedding and remove the effects of the specified covariates. However, there is no way to go back from the integrated embedding to the original gene space. This means that we cannot ask the counterfactual what the expression of a cell from the control condition would have been, had it been treated.
 
-A new tool called [LEMUR](https://bioconductor.org/packages/lemur/) provides this functionality by matching the subspace of each condition [@ahlmann-eltze2023]. @fig-subspace_matching illustrates the principle.
+A new tool called [LEMUR](https://bioconductor.org/packages/lemur/) provides this functionality by matching the subspace of each condition [@ahlmann-eltze2024]. @fig-subspace_matching illustrates the principle.
 
 ![Schematic picture of data from two conditions with the respective linear subspace.](images/Subspace_illustration_both_condition_with_arrow.png){#fig-subspace_matching width="40%"}
 
@@ -318,6 +392,10 @@ LEMUR takes as input a `SingleCellExperiment` object, the specification of the e
 fit <- lemur::lemur(sce, design = ~ stim, n_embedding = 30, verbose = FALSE)
 fit <- lemur::align_by_grouping(fit, fit$colData$cell, verbose = FALSE)
 ```
+
+::: {.callout-note}
+## Challenge: How much do the results change if you change the default parameters in LEMUR?
+:::
 
 ::: {.callout-note collapse="true"}
 ## Challenge: How to refine the embedding of LEMUR with an automated tool?
@@ -357,7 +435,7 @@ We call LEMUR's `test_de` function to compare the expression values in the `"sti
 fit <- lemur::test_de(fit, contrast = cond(stim = "stim") - cond(stim = "ctrl"))
 ```
 
-We can now pick individual genes and plot the predicted log fold change for each cell to show how it varies as a function of the underlying gene expression values (@fig-lemur_plot_de).
+We can now pick individual genes and plot the predicted log fold change for each cell to show how it varies as a function of the underlying gene expression values (@fig-lemur_plot_de-1).
 
 ```{r}
 #| label: fig-lemur_plot_de
