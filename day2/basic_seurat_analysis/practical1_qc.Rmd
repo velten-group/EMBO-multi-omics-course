@@ -1,0 +1,413 @@
+---
+title: "Introduction to scRNA-seq data analysis using Seurat"
+author: 
+  name: "Ricard Argelaguet"
+date: "`r Sys.Date()`"
+output:
+  BiocStyle::html_document:
+    toc: true
+    toc_depth: 2
+---
+
+# Introduction
+
+This vignette illustrates the most basic functionalities of `Seurat` to analyse scRNA-seq. It has been adapted from https://satijalab.org/seurat/articles/pbmc3k_tutorial.html
+
+# Load libraries
+
+```{r message=FALSE}
+library(tidyverse)
+library(Seurat)
+```
+
+# Load data
+
+The data set consists of ~3,000 Peripheral Blood Mononuclear Cells, [provided by 10x Genomics](https://support.10xgenomics.com/single-cell-gene-expression/datasets). The data set should be available via the Docker image. If not, download the data set from [here](https://s3-us-west-2.amazonaws.com/10x.files/samples/cell/pbmc3k/pbmc3k_filtered_gene_bc_matrices.tar.gz), extract it in a folder of your choice and decompress all .gz files. Use the terminal to get familiar with the data format, which is explained [here](https://support.10xgenomics.com/single-cell-gene-expression/software/pipelines/latest/output/matrices).
+
+Once you are ready, read the data with the command below. Make sure replace the directory:
+```{r}
+counts.mtx <- Read10X(data.dir = "~/Dropbox/Teaching/singlecell_EMBL_Feb2024/data/filtered_gene_bc_matrices")
+class(counts.mtx)
+```
+
+The count matrix is stored in a sparse Matrix format, which is a convenient data structure when data sets have lots of zeros. Read more about it [here](https://cmdlinetips.com/2019/05/introduction-to-sparse-matrices-in-r)
+```{r}
+# counts.mtx[32706,1]
+counts.mtx[1:5,1:5]
+```
+**(Q) Calculate the fraction of zeros in the count matrix (hint: you may have to use functions from the `Matrix` package to deal with sparse matrices)**.
+
+<details>
+  <summary>**Solution**</summary>
+  
+```{r}
+Matrix::mean(counts.mtx==0)
+```
+
+</details>
+
+
+# Create Seurat object
+
+We can create a Seurat object by calling the `CreateSeuratObject` function. It takes as parameters the count matrix, the name of the "project" (not important):
+```{r}
+seurat <- CreateSeuratObject(counts = counts.mtx, project = "pbmc3k")
+seurat
+```
+
+Genes are stored as rows and cells as columns. Note that cells are labeled with their corresponding barcode:
+```{r}
+head(rownames(seurat))
+head(colnames(seurat))
+```
+
+The cell metadata can be obtained in a data.frame format with "@meta.data", where each row corresponds to one cell. For now just ignore the columns
+
+```{r}
+head(pbmc_small@meta.data)
+```
+One can also extract a single column from the metadata using:
+
+```{r}
+head(pbmc_small$groups)
+```
+
+## Data manipulation of Seurat objects
+
+### Subset genes
+
+```{r}
+seurat[1:5,]
+```
+
+```{r}
+seurat[c("CD4","CD79A","IL7R"),]
+```
+
+```{r}
+seurat[rownames(seurat) %in%c("CD4","CD79A","IL7R"),]
+```
+
+### Subset cells
+
+```{r}
+seurat[,1:5]
+```
+
+```{r}
+seurat[,c("CAGTTGGACATACG-1","CAGGGCACTCCCGT-1","CAGGTAACAGACTC-1")]
+```
+
+### Extract data
+
+Print assay names
+```{r}
+Assays(seurat)
+```
+
+Extract data from a specific assay
+```{r}
+rna.assay <- GetAssay(seurat,"RNA")
+
+# Extract count matrix from a specific assay
+GetAssayData(rna.assay, "counts")[1:5,1:5]
+```
+
+
+# Quality control
+
+The most common approaches to filter low quality cells are based on three metrics:  
+- the amount of RNA measured per cell.  
+- the number of genes measured per cell.  
+- The percentage of mitochondrial RNA meaasured within each cell: cells with high numbers of mithocondrial genes are considered to be apoptotic or dying cells and should be removed from downstream analysis.  
+
+**(Q) Calculate the total number of RNA reads per cell. Plot a histogram and define QC threshold based on the distribution. (Hint: you may have to use functions from the `Matrix` package to deal with sparse matrices).**  
+
+**(Q) Calculate the total number of genes measured per cell. Plot a histogram and define QC threshold based on the distribution. **  
+
+**(Q) Calculate percentage of mitochondrial RNA for each cell. Plot a histogram and define QC threshold based on the distribution. (Hint: mitochondrial genes begin with the pattern "^Mt-")**  
+
+```{r}
+rna.mtx <- GetAssayData(rna.assay, "counts")
+```
+
+Add your code here
+```{r}
+
+```
+
+<details>
+  <summary>**Solution**</summary>
+  
+```{r}
+nReads.per.cell <- Matrix::colSums(rna.mtx)
+hist(nReads.per.cell, breaks = 100)
+abline(v=750, col="red", lwd=2)
+```
+
+```{r}
+# nGenes.per.cell <- apply(rna.mtx>0,2,sum)
+nGenes.per.cell <- Matrix::colSums(rna.mtx>0)
+hist(nGenes.per.cell, breaks=100)
+abline(v=400, col="red", lwd=2)
+```
+
+```{r}
+mt.genes <- grep(pattern = "MT-", x = rownames(rna.mtx), value = TRUE)
+mt_percentage.per.cell <- 100*colSums(rna.mtx[mt.genes,])/colSums(rna.mtx)
+
+hist(mt_percentage.per.cell, breaks=100)
+abline(v=5, col="red", lwd=2)
+```
+
+</details>
+  
+
+**(Q) Filter cells based on the desired QC threshold. How many cells did you remove?**
+
+
+<details>
+  <summary>**Solution**</summary>
+  
+```{r}
+cells.to.keep <- mt_percentage.per.cell<5 & nGenes.per.cell>400 & nReads.per.cell>100
+seurat <- seurat[,cells.to.keep]
+```
+
+</details>
+
+
+# Normalisation
+
+After removing low quality cells the next step is to normalize the data. By default, Seurat applies a global-scaling normalization method `LogNormalize` that normalizes the feature expression measurements for each cell by the total expression, then multiplies this by a scale factor (10,000 by default), and log-transforms the result.  
+
+**(Q) Why do we normalise cells by their "library size"? Why do we apply a log transformation?**
+
+<details>
+  <summary>**Solution**</summary>
+  
+The log transformation has at least three goals:  
+- Distances between log-transformed expression values represent log fold changes, which are the canonical way to measure changes in expression.  
+- It mitigates (but does not remove) the mean–variance relationship in single-cell data.  
+- It reduces the skewness of the data to approximate the assumption of many downstream analysis tools that the data are normally distributed.  
+
+</details>
+
+```{r}
+seurat <- NormalizeData(seurat)
+```
+
+
+# Feature selection
+
+To extract highly-variable genes we will fit a mean vs variance trend across genes. and select the genes with show the highest levels of variation. This is all automated in the `FindVariableFeatures` function:
+
+```{r message=FALSE}
+seurat <- FindVariableFeatures(seurat, selection.method = "vst", nfeatures = 2000)
+
+# Identify the 10 most highly variable genes
+top10 <- head(VariableFeatures(seurat), 10)
+
+plot1 <- VariableFeaturePlot(seurat)
+plot2 <- LabelPoints(plot = plot1, points = top10, repel = TRUE)
+plot2
+```
+
+# Scale data
+
+The last preprocessing step is to scale the data so that each gene has mean of 0 and a variance of 1. This is an optional step that is applied by default in Seurat, but other methods choose not to do it.
+
+**(Q) What do you think are the advantages and disadvantages of scaling each gene**
+
+<details>
+  <summary>**Solution**</summary>
+</details>
+
+
+```{r}
+seurat <- ScaleData(seurat, features=VariableFeatures(seurat))
+```
+
+# Linear dimensionality reduction
+
+The first step to visualise high-throughput genomics data is to reduce the dimensionality of the data with Principal Component Analysis. This compressed and denoised latent space will be used for many downstream analysis
+
+In Seurat, this is implemented in the `RunPCA` function. 
+
+```{r}
+seurat <- RunPCA(seurat, npcs = 50, verbose = F)
+```
+
+<!-- (Q) Extract the scaled data and do the PCA manually -->
+
+Plot the first two principal components
+```{r}
+DimPlot(seurat, reduction = "pca", dims = c(1,2))
+```
+
+The top principal components represent a robust compression of the dataset. However, how many components should we choose to include? There is no right or wrong answer to this, and it depends on what do you want to do with the principal components. In any case, generally speaking, you want to keep PCs that explain large amounts of variance. The [Elbow plot](https://en.wikipedia.org/wiki/Scree_plot), also called Scree plot, can be useful to determine the cutoff.
+
+In this example, we can observe an ‘elbow’ around PC9-10, suggesting that the majority of true signal is captured in the first 10 PCs:
+```{r}
+ElbowPlot(seurat)
+```
+
+# Graph representation
+
+
+One of the most fundamental components of the single cell analysis framework is the k-Nearest Neighbor graph (kNN). It is a computational representation of the data that summarises the entire data set with a graph structure, where each node corresponds to a cell, and each cell is connected to its k nearest cells based on the Euclidean distance between their gene expression profiles. kNN graphs are used in downstream analysis to drive dimensionality reduction methods, to detect communities (i.e. clusters) of related cells, and to establish trajectories through network connections. 
+
+**(Q) Would you use the high-dimensional representation or the PCA representation to calculate the Euclidean distances?**  
+
+<details>
+  <summary>**Solution**</summary>
+</details>
+
+In Seurat, kNN graphs are calculated using the `FindNeighbors` function, which takes two main hyperparameters: $dims$: the number of PC dimensions to use, and $k.param$, the number of nearest neighbours to consider for each cell. Here we will the first 10 PCs and 20 neighbours, but there is some flexibility on this. Feel free to try different hyperparameters and see how this affects the downstream analysis.
+
+```{r}
+seurat <- FindNeighbors(seurat, dims = 1:10, k.param = 20)
+```
+
+The graph is stored as a sparse matrix of dimensions (ncells,ncells), where $X_{ij}=1$ indicates a connection between cell $i$ and $j$: 
+```{r}
+seurat@graphs[["RNA_nn"]][1:5,1:5]
+```
+
+# Clustering
+
+Clusters are obtained by grouping cells based on the similarity of their gene expression profiles. Two approaches exist to generate cell clusters from these similarity scores: clustering algorithms and community detection methods. Clustering algorithms include the well-known [hierarchical clustering](https://en.wikipedia.org/wiki/Hierarchical_clustering) and [k-means clustering algorithm](https://en.wikipedia.org/wiki/K-means_clustering). Both algorithms are valid for single-cell data, but they are quite slow and are outperfomed by graph-based community detection algorithms. The most commonly used one is called [Louvain algorithm](https://www.youtube.com/watch?v=k0uxnVEuuz0&t=228s), which is implemented in the `FindClusters` function from the Seurat package.
+
+```{r}
+seurat <- FindClusters(seurat, resolution = 0.5)
+```
+
+A resolution of 0.5 leads to 7 clusters:
+```{r}
+table(seurat$RNA_snn_res.0.5)
+```
+
+Let's set the cluster identity as the cell's identity in Seurat (ignore this for now...)
+```{r}
+Idents(seurat) <- "RNA_snn_res.0.5"
+```
+
+# Non-linear dimensionality reduction
+
+In most bulk data sets, a linear dimensionality reduction step is sufficient to visualise the data, but single-cell datasets are often more complex and contain many more sources of variation. Non-linear methods are then essential to visualise the entire data set in only 2 dimensions. There are two popular algorithms for non-linear dimensionality reduction in single-cell data: t-SNE and UMAP
+ 
+## t-SNE
+
+For an explanation on the t-SNE algorithm, [watch this video](https://www.youtube.com/watch?v=NEaUSP4YerM&t=397s)
+
+This algorithm is implemented in the `runTSNE` function of Seurat. It takes two main hyperparameters: the number of PC dimensions to use as input, and the `perplexity` (the key hyperparameter):
+```{r message=FALSE}
+seurat <- RunTSNE(seurat, dims = 1:10, perplexity = 20)
+DimPlot(seurat, reduction = "tsne")
+```
+
+## UMAP
+
+For an explanation on the UMAP algorithm, [watch this video](https://www.youtube.com/watch?v=6BPl81wGGP8)
+
+This algorithm is implemented in the `runUMAP` function of Seurat. It takes two main hyperparameters: the number of PC dimensions to use as input, the number of neighbours for the kNN graph (`n.neighbors`) and the minimum distance (`min.dist`):
+```{r message=FALSE}
+seurat <- RunUMAP(seurat, dims = 1:10, n.neighbors = 30, min.dist = 0.3)
+DimPlot(seurat, reduction = "umap")
+```
+
+
+**(Q) Bonus points: create an interactive 3D UMAP using the `pch3d` function from the `rgl` package (see the teapot.Rmd vignette for an example)**
+
+<details>
+  <summary>**Solution**</summary>
+
+
+```{r eval=FALSE}
+library(rgl)
+library(RColorBrewer)
+```
+
+```{r message=FALSE, eval=FALSE}
+seurat <- RunUMAP(seurat, n.components = 3, dims = 1:30)
+umap.mtx <- seurat@reductions[["umap"]]@cell.embeddings
+```
+
+For the celltype colours you can use the `celltype.color` column
+```{r eval=FALSE}
+mycolors <- colorRampPalette(brewer.pal(8, "Set2"))(length(unique(seurat$RNA_snn_res.0.5)))
+names(mycolors) <- unique(seurat$RNA_snn_res.0.5)
+seurat$cluster.color <- stringr::str_replace_all(seurat$RNA_snn_res.0.5,mycolors)
+```
+
+```{r eval=FALSE}
+open3d()
+pch3d(
+  x = umap.mtx[,1], y = umap.mtx[,2], z = umap.mtx[,3],
+  color = seurat$cluster.color,
+  cex = 0.25
+)
+```
+
+</details>
+
+# Find marker genes
+
+To assign cell type labels to each cluster we need to perform differential expression analysis and identify marker genes for each cell type.
+
+`FindMarkers` function takes as input `ident.1` for the group A identity and `ident.2` for the group B identity. if `ident.2` is NULL (i.e. not provided), it uses all other cells for comparison. Importantly, to run this function one needs to set the cell "Identity" to the right metadata column with:
+```{r}
+Idents(seurat) <- "RNA_snn_res.0.5"
+```
+
+```{r}
+cluster3.markers <- FindMarkers(seurat, ident.1 = 3)
+head(cluster3.markers, n = 6)
+```
+
+Violin Plot of marker genes, grouping each cell by their cluster identity
+```{r}
+VlnPlot(seurat, features = rownames(cluster3.markers)[1:6])
+```
+
+Plot UMAP coloured by gene expression of marker genes of cluster 3
+```{r}
+FeaturePlot(seurat, features = rownames(cluster3.markers)[1:4], reduction="umap")
+```
+
+In `Seurat` one can perform this analyis for all clusters in a systematic manner with the `FindAllMarkers` function:
+```{r message=FALSE}
+gene.markers <- FindAllMarkers(seurat, only.pos = TRUE, min.pct = 0.25, logfc.threshold = 0.25)
+```
+
+Select top 10 marker genes per cell type and plot a heatmap
+```{r}
+top10 <- gene.markers %>% group_by(cluster) %>% top_n(n = 10, wt = avg_log2FC)
+DoHeatmap(seurat, features = top10$gene) + NoLegend()
+```
+
+# Label the clusters
+
+By looking at marker genes and Googling a bit one can then label each cluster with their cell type identity:
+```{r}
+new.cluster.ids <- c("Naive CD4 T", "Memory CD4 T", "CD14+ Mono", "B", "CD8 T", "FCGR3A+ Mono", "NK", "DC", "Platelet")
+names(new.cluster.ids) <- levels(seurat)
+seurat <- RenameIdents(seurat, new.cluster.ids)
+DimPlot(seurat, reduction = "umap", label = TRUE, pt.size = 0.5) + NoLegend()
+```
+
+# Save
+
+If you want to save the Seurat object you can use the `saveRDS` and the `readRDS` functions
+```{r}
+# saveRDS(seurat, file = "(..)/seurat.rds")
+```
+
+<details>
+  <summary>**Session Info**</summary>
+  
+```{r}
+sessionInfo()
+```
+
+</details>

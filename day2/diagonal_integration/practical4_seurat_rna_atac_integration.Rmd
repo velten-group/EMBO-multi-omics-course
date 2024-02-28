@@ -1,0 +1,262 @@
+---
+title: "Diagonal integration of scRNA-seq and scATAC-seq data using Seurat"
+date: 'Compiled: `r format(Sys.Date(), "%B %d, %Y")`'
+author:
+- name: "Ricard Argelaguet"
+  affiliation: "Altos Labs, Cambridge, UK"
+  email: "ricard.argelaguet@gmail.com"
+output:
+  BiocStyle::html_document:
+    toc: true
+vignette: >
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+---
+
+```{r markdown.setup, include=FALSE}
+knitr::opts_chunk$set(
+  tidy = TRUE,
+  fig.width = 12,
+  tidy.opts = list(width.cutoff = 95),
+  message = FALSE,
+  warning = FALSE,
+  time_it = TRUE,
+  error = TRUE
+)
+```
+
+# Introduction
+
+This tutorial demonstrates how to use Seurat for diagonal integration. In particular it demonstrates how to use an annotated scRNA-seq dataset to label cells from a scATAC-seq experiment. The original (and more complette) vignette can be found [in the Seurat website](https://satijalab.org/seurat/articles/seurat5_atacseq_integration_vignette). I modified and simplified the vignette for didactic purposes.
+
+# Theoretical requirements
+
+-   [Basic principles of single-cell data integration](https://www.nature.com/articles/s41587-021-00895-7).
+-   [Seurat for scRNA-seq analysis](https://satijalab.org/seurat/articles/pbmc3k_tutorial).  
+-   Basic familiarity with the [Signac package](https://satijalab.org/signac/) for scATAC-seq analysis.
+-   Notions of the [Mutual Nearest Neighbours](https://www.nature.com/articles/nbt.4091) approach for batch effect correction.
+-   Familiarity with the [Seurat v3 paper](https://www.cell.com/cell/fulltext/S0092-8674(19)30559-8) for the anchor-based integration approach.
+
+# Data
+
+We will use a data set of scRNA-seq and scATAC-seq simultaneously collected from the same human PBMCs using the [10x Multiome kit](https://www.10xgenomics.com/products/single-cell-multiome-atac-plus-gene-expression). For the purposes of this vignette, we treat the two modalities as originating from two different experiments and integrate them together. Since they were originally measured in the same cells, this provides a ground truth that we can use to assess the accuracy of integration.
+
+The PBMC multiome dataset is available from [10x genomics](https://support.10xgenomics.com/single-cell-multiome-atac-gex/datasets/1.0.0/pbmc_granulocyte_sorted_10k). To facilitate easy loading and exploration, it is also available as part of the SeuratData package with cell annotations. We load the RNA and ATAC data in separately, and pretend that the data modalities were measured in separate experiments.
+
+We can install the data set as an R package as follows:
+
+```{r installdata}
+# install.packages("pbmcMultiome.SeuratData", repos="http://seurat.nygenome.org/", type = "source")
+```
+
+# Load dependencies
+
+```{r loadpkgs}
+library(Seurat)
+library(SeuratData)
+library(Signac)
+library(EnsDb.Hsapiens.v86)
+library(ggplot2)
+library(cowplot)
+```
+
+# Load data
+
+RNA
+```{r, message=FALSE}
+pbmc.rna <- LoadData("pbmcMultiome.SeuratData", "pbmc.rna")
+
+# some basic filtering (ignore)
+pbmc.rna <- subset(pbmc.rna, seurat_annotations != 'filtered') 
+
+pbmc.rna
+```
+
+ATAC
+```{r, message=FALSE}
+pbmc.atac <- LoadData("pbmcMultiome.SeuratData", "pbmc.atac")
+
+# some basic filtering (ignore)
+pbmc.atac <- subset(pbmc.atac, seurat_annotations != 'filtered') 
+
+pbmc.atac
+```
+
+Explore cell metadata for the RNA object
+```{r}
+head(pbmc.rna@meta.data)
+```
+
+Cell type labels:
+```{r}
+table(pbmc.rna@meta.data$seurat_annotations)
+```
+
+Explore cell metadata for the ATAC object. Note that we also have cell type labels for the ATAC cells because the two modalities were measured in the same cell, but we will treat cells as if they were derived from different scRNA-seq and scATAC-seq experiments. Thus we will ignore the labels that we have for the ATAC object and we will try to infer them from the RNA modality.
+```{r}
+head(pbmc.atac@meta.data)
+```
+
+# Data processing for each modality
+
+## Gene expression
+
+-   **(Q) what are the three main operations that are used to normalise scRNA-seq data in Seurat?**\
+-   **(Q) Why are the UMAP and t-SNE algorithms commonly used in scRNA-seq data analysis, instead of just doing PCA?**\
+
+Perform standard data processing and dimensionality reduction for the RNA data
+```{r}
+pbmc.rna <- NormalizeData(pbmc.rna)
+pbmc.rna <- FindVariableFeatures(pbmc.rna)
+pbmc.rna <- ScaleData(pbmc.rna)
+pbmc.rna <- RunPCA(pbmc.rna, verbose = F)
+pbmc.rna <- RunUMAP(pbmc.rna, dims = 1:30, verbose = F)
+pbmc.rna
+```
+
+## ATAC
+
+scATAC-seq data tends to be sparser than scRNA-seq data and alternative normalisation strategies have been suggested, most notably the use of techniques from natural language processing that were developed for sparse binary data. This includes term frequency-inverse document frequency (TF-IDF) normalization, a two-step normalization procedure that corrects cells for differences in sequencing depth, and corrects peaks to give higher values to more rare peaks. The TF-IDF matrix is then used for dimensionality reduction using Singular Value Decomposition (SVD). Intuitively, this is similar to the library size normalisation and principal component analysis that is done in scRNA-seq data analysis. 
+
+-   **(Q) Why is scATAC-seq more sparse than scRNA-seq? Why is more biologically plausible to analyse scATAC-seq as binary data than it is for scRNA-seq data? **\
+
+Add gene annotations to the ATAC-seq data (important for later)
+```{r}
+annotations <- GetGRangesFromEnsDb(ensdb = EnsDb.Hsapiens.v86)
+seqlevelsStyle(annotations) <- 'UCSC'
+genome(annotations) <- "hg38"
+Annotation(pbmc.atac) <- annotations
+```
+
+```{r}
+pbmc.atac <- RunTFIDF(pbmc.atac)
+pbmc.atac <- FindTopFeatures(pbmc.atac, min.cutoff = 'q0')
+pbmc.atac <- RunSVD(pbmc.atac)
+pbmc.atac <- RunUMAP(pbmc.atac, reduction = 'lsi', dims = 2:30, reduction.name = "umap.atac", reduction.key = "atacUMAP_")
+pbmc.atac
+```
+
+-   **(Q) Here we exclude the first singular vector (i.e. the first principal component) for downstream analysis. Why? (Hint: use the `DepthCor` function from the Signac package**\
+
+-   **[Task] Calculate the mean and the variance of the top 100 features and plot them one against the other. Based on your results, is there a difference in selecting the top most open features (as done in Signac) compared to selecting the most variable features?**\
+
+```{r}
+atac.mean <- apply(LayerData(pbmc.atac, "counts")[1:100,],1,mean)
+atac.var <- apply(LayerData(pbmc.atac, "counts")[1:100,],1,var)
+plot(atac.mean,atac.var)
+```
+
+Now we plot the UMAP from both modalities. Note that cells have been previously annotated based on the RNA data
+```{r viz1}
+p1 <- DimPlot(pbmc.rna, group.by = 'seurat_annotations', label = TRUE) + 
+  NoLegend() + ggtitle("RNA") + labs(x="UMAP-1", y="UMAP-1")
+
+p2 <- DimPlot(pbmc.atac, label = FALSE) + 
+  NoLegend() + ggtitle("ATAC") + labs(x="UMAP-1", y="UMAP-1")
+
+p1 + p2
+```
+
+# Data integration
+
+## Gene activity scores
+
+In order to identify 'anchors' between scRNA-seq and scATAC-seq experiments, we first generate a rough estimate of the transcriptional activity of each gene by quantifying ATAC-seq counts in the 2 kb-upstream region and gene body, using the `GeneActivity()` function in the Signac package. The ensuing gene activity scores from the scATAC-seq data are then used as input for canonical correlation analysis, along with the gene expression quantifications from scRNA-seq. We perform this quantification for all genes identified as being highly variable from the scRNA-seq dataset.
+
+```{r gene.activity, cache=FALSE}
+# quantify gene activity
+gene.activities <- GeneActivity(pbmc.atac, features = VariableFeatures(pbmc.rna))
+
+# add gene activities as a new assay
+pbmc.atac[["ACTIVITY"]] <- CreateAssayObject(counts = gene.activities)
+
+# normalize gene activities
+DefaultAssay(pbmc.atac) <- "ACTIVITY"
+pbmc.atac <- NormalizeData(pbmc.atac)
+pbmc.atac <- ScaleData(pbmc.atac, features = rownames(pbmc.atac))
+```
+
+## Identify anchors between data modalities
+
+- **(Q) Why is canonical correlation analysis (CCA) used instead of principal component analysis (PCA)?**  
+
+```{r label.xfer}
+transfer.anchors <- FindTransferAnchors(
+  reference = pbmc.rna,
+  query = pbmc.atac,
+  features = VariableFeatures(object = pbmc.rna),
+  reference.assay = 'RNA',
+  query.assay = 'ACTIVITY',
+  reduction = 'cca'
+)
+```
+
+## Annotate scATAC-seq cells via label transfer
+
+After identifying anchors, we can transfer annotations from the scRNA-seq dataset onto the scATAC-seq cells. The annotations are stored in the `seurat_annotations` field, and are provided as input to the `refdata` parameter. The output will contain a matrix with predictions and confidence scores for each ATAC-seq cell.
+
+```{r transfer.data}
+celltype.predictions <- TransferData(
+  anchorset = transfer.anchors,
+  refdata = pbmc.rna$seurat_annotations,
+  weight.reduction = pbmc.atac[['lsi']],
+  dims = 2:30
+)
+
+pbmc.atac <- AddMetaData(pbmc.atac, metadata = celltype.predictions)
+```
+
+Note that in `FindTransferAnchors()`, we typically project the PCA structure from the reference onto the query when transferring between scRNA-seq datasets. However, when transferring across modalities we find that CCA better captures the shared feature correlation structure and therefore set `reduction = 'cca'` here. Additionally, by default in `TransferData()` we use the same projected PCA structure to compute the weights of the local neighborhood of anchors that influence each cell's prediction. In the case of scRNA-seq to scATAC-seq transfer, we use the low dimensional space learned by computing an LSI on the ATAC-seq data to compute these weights as this better captures the internal structure of the ATAC-seq data.
+
+## Inspect predicted cell annotations in scATAC-seq 
+
+After performing transfer, the ATAC-seq cells have predicted annotations (transferred from the scRNA-seq dataset) stored in the `predicted.id` field. Since these cells were profiled with the 10x multiome kit, we have a ground-truth annotation that can be used for evaluation
+
+```{r}
+pbmc.atac$annotation_correct <- pbmc.atac$predicted.id == pbmc.atac$seurat_annotations
+```
+
+Plot UMAP with the predicted annotations alonside the "true annotations" derived from scRNA-seq data.
+```{r viz.label.accuracy}
+p1 <- DimPlot(pbmc.atac, group.by = 'predicted.id', label = TRUE) + 
+  NoLegend() + 
+  ggtitle("Predicted annotation")
+
+p2 <- DimPlot(pbmc.atac, group.by = 'seurat_annotations', label = TRUE) + 
+  NoLegend() + 
+  ggtitle("Ground-truth annotation")
+
+p1 | p2
+```
+
+-   **[Task] Plot a heatmap that shows the fraction of times that each true cell type (x-axis) is predicted as another cell type (y-axis). The diagonal terms should correspond to the true predictions and off-diagonal terms should correspond to wrong predictions. If the integration worked well, you should expect values close to 1 in the diagonal. Which cell cell types have the lower accuracy? Why?**
+
+```{r score.viz, fig.height = 5}
+predictions <- table(pbmc.atac$seurat_annotations, pbmc.atac$predicted.id)
+predictions <- predictions / rowSums(predictions) # normalize for number of cells in each cell type
+predictions <- as.data.frame(predictions)
+colnames(predictions) <- c("celltype_rna","celltype_atac","frequency")
+head(predictions)
+```
+
+```{r}
+ggplot(predictions, aes(x=celltype_rna, y=celltype_atac, fill=frequency)) +
+  geom_tile() +
+  scale_fill_gradient(name = "Fraction of cells", low = "#ffffc8", high = "#7d0025") +
+  xlab("Cell type annotation (RNA)") +
+  ylab("Predicted cell type label (ATAC)") +
+  theme(
+    axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1)
+  ) 
+```
+
+
+<details>
+
+<summary>**Session Info**</summary>
+
+```{r}
+sessionInfo()
+```
+
+</details>
