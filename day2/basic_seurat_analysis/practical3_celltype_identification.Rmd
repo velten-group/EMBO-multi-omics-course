@@ -1,0 +1,158 @@
+---
+title: "Automated cell type identification using Seurat"
+author: 
+  name: "Ricard Argelaguet"
+date: "`r Sys.Date()`"
+output:
+  BiocStyle::html_document:
+    toc: true
+    toc_depth: 2
+---
+
+
+# Introduction
+
+This vignette illustrates how to perform automated cell type identification by mapping a query dataset onto a reference data set using batch effect correction algorithms. It has been adapted from https://satijalab.org/seurat/articles/integration_mapping.html. 
+
+# Load libraries
+
+```{r, warning=FALSE, message=FALSE}
+library(tidyverse)
+library(Seurat)
+library(SeuratData)
+library(ggplot2)
+
+set.seed(42)
+```
+
+# Load the data
+
+The data set consists of ~5kb cells of human pancreatic islet cells profiled by three different technologies. It is the same data set used in practical2:
+
+```{r}
+seurat <- LoadData("panc8")
+
+# subset object
+seurat <- seurat[,seurat$tech%in%c("celseq","celseq2","smartseq2")]
+```
+
+```{r}
+table(seurat$tech)
+```
+
+## Prepare the data
+
+We will define a query data set using one arbitrary technology where we will assume that no cell type labels are present. Another technology will serve as our reference data set in order to automatically infer cell type assignments from it.
+
+First we will split the Seurat object into a list of Seurat objects, one for each technology. Then we will perform data normalization and feature selection for each technology separately.
+
+```{r, warning=FALSE, message=FALSE}
+seurat.list <- SplitObject(seurat, split.by = "tech")
+```
+
+```{r, warning=FALSE, message=FALSE}
+for (i in 1:length(seurat.list)) {
+  
+  # Normalisation
+  seurat.list[[i]] <- NormalizeData(
+    object = seurat.list[[i]], 
+    verbose = FALSE
+  )
+  
+  # Feature selection
+  seurat.list[[i]] <- FindVariableFeatures(
+    object = seurat.list[[i]],
+    selection.method = "vst",
+    nfeatures = 2000, 
+    verbose = FALSE
+  )
+}
+```
+
+Let's define the Smart-seq2 data set as the query and the CELseq2 data set as the reference. Cell type identities are present for both data sets but we will ignore this information from the query data.
+```{r}
+seurat.query <- seurat.list$smartseq2
+seurat.reference <- seurat.list$celseq2
+```
+
+# Data integration
+
+In the previous practical we performed batch effect correction using the `IntegrateData` function. In this vignette we will perform a different type of data integraton aimed at transferring the celltypes from the reference to the query data sets. The function we will use is called `TransferData`. Both functions share similarities (i.e. both procedures begin by identifying anchors between the two data sets), but there is an important distinction between data transfer and integration. Most importantly, in `TransferData`, we do not correct or modify the expression data, but only transfer cellular attributes from one data set to the other (i.e. celltype assignments in this case)
+
+## Find integration anchors
+
+As in the previous vignette, the first part is to reduce the dimensionality of the data using PCA or CCA and then identify the "anchors" or the "mutual neighbours" between the different data sets (i.e. pairs of cells from each dataset that are contained within each other's neighbourhood)
+```{r, warning=FALSE, message=FALSE}
+anchors <- FindTransferAnchors(
+  query = seurat.query, 
+  reference = seurat.reference, 
+  dims = 1:30
+)
+```
+
+## Transfer cell type assignments
+
+`TransferData` returns a matrix with predicted IDs and prediction scores for each cell type
+```{r}
+celltype.predictions <- TransferData(
+  anchorset = anchors, 
+  refdata = seurat.reference$celltype, 
+  dims = 1:30
+  )
+celltype.predictions[1:3,1:3]
+```
+
+Add celltype predictions to the query metadata.
+```{r}
+seurat.query <- AddMetaData(seurat.query, metadata = celltype.predictions[,c("predicted.id"), drop=F])
+table(seurat.query@meta.data$predicted.id)
+```
+
+**(Q) Plot a UMAP of the query data and colour the cells by the predicted cell type assignemnts **
+
+```{r message=FALSE}
+seurat.query <- ScaleData(seurat.query)
+seurat.query <- RunPCA(seurat.query, npcs = 30, verbose = FALSE)
+seurat.query <- RunUMAP(seurat.query, reduction = "pca", dims = 1:30)
+DimPlot(seurat.query, group.by ="predicted.id", reduction = "umap")
+```
+
+## Validation of cell type assignments
+
+**(Q) Validate the cell type assignments by calculating differentially expressed genes between alpha and beta cells separately in the query and the reference data set. Out of the top 100 DE genes in each technology, how many do overlap? Hint: Use the `FindMarker` genes function **
+
+<details>
+  <summary>**Solution**</summary>
+  
+Do differential expression in the query data
+```{r}
+Idents(seurat.query) <- "predicted.id"
+diff.genes.query <- FindMarkers(seurat.query, ident.1 = "alpha", ident.2 = "beta")
+```
+
+Do differential expression in the reference data
+```{r}
+Idents(seurat.reference) <- "celltype"
+diff.genes.reference <- FindMarkers(seurat.reference, ident.1 = "alpha", ident.2 = "beta")
+```
+
+Overlap top 100 DE genes
+```{r}
+top.genes.query <- rownames(head(diff.genes.query,n=100))
+top.genes.reference <- rownames(head(diff.genes.reference,n=100))
+length(intersect(top.genes.query,top.genes.reference))
+```
+
+Plot 4 arbitrarly selected genes
+```{r}
+genes.to.plot <- intersect(top.genes.query,top.genes.reference) %>% head(n=4)
+
+for (i in genes.to.plot) {
+  p1 <- VlnPlot(seurat.query, features=i) + NoLegend()
+  p2 <- VlnPlot(seurat.reference, features=i) + NoLegend()
+  p <- cowplot::plot_grid(plotlist=list(p1,p2), nrow=1)
+  print(p)
+}
+```
+
+</details>
